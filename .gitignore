@@ -31,10 +31,12 @@ node_modules/
 # generated proto (we'll commit the .proto sources, not the gen output, by default)
 proto/gen/
 
+# local-only working areas (design docs, scratch, channel POCs)
+plans/
+playground/
+
 # local data
 appdata/
-playground/*/appdata/
-playground/cliq/cloudflared/
 
 # IDE / OS
 .idea/

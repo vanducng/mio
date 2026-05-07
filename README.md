@@ -35,7 +35,6 @@ the receiver.
 | `sdk-py/` | Python | Same, for the AI side. |
 | `sink-gcs/` | Go | Consumer that writes raw payloads to GCS. Cold storage + analytics substrate. |
 | `examples/echo-consumer/` | Python | Tiny stub proving the loop. The real agents live in MIU. |
-| `playground/` | — | Hands-on rigs for validating design before code. NATS first. |
 | `deploy/` | — | `docker-compose.yml` for local; Helm charts for GKE. |
 
 ## Stack
@@ -53,9 +52,6 @@ the receiver.
 # Coming in P0:
 make up                 # NATS + Postgres + MinIO
 make proto              # buf generate
-
-# Available now:
-cd playground/nats && make up && make bootstrap
 ```
 
 ## Design rules — non-negotiable
@@ -67,7 +63,7 @@ cd playground/nats && make up && make bootstrap
 5. **Per-thread ordering** via single-replica AI consumer with `MaxAckPending=1`.
 6. **Two-step UX for slow LLM calls.** Send "thinking…" immediately, edit-in-place when answered.
 
-See [`plan.md`](plan.md) for the full design doc and phased roadmap.
+Full design doc and phased roadmap live in `docs/system-architecture.md` (incoming).
 
 ## Status
 
