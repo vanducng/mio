@@ -1,0 +1,43 @@
+# env / secrets
+.env
+.env.*
+!.env.example
+secrets.env
+*.secret
+*.key
+*.pem
+
+# Go
+bin/
+dist/
+vendor/
+*.test
+*.out
+coverage.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node (sdk-py docs builds, generated stuff later)
+node_modules/
+
+# generated proto (we'll commit the .proto sources, not the gen output, by default)
+proto/gen/
+
+# local data
+appdata/
+playground/*/appdata/
+playground/cliq/cloudflared/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp

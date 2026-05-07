@@ -1,0 +1,89 @@
+# MIO — Messaging I/O for MIU
+
+MIO is the messaging I/O platform for [MIU](https://github.com/vanducng/miu).
+It connects MIU's AI agents to the chat channels customers actually live in
+(Zoho Cliq first, then Slack, Telegram, Discord, …) and gives them a
+clean, channel-agnostic envelope to receive messages and respond back.
+
+> Channels are messy. Agents shouldn't care.
+
+## Why decoupled
+
+Every channel webhook has a hard ack deadline (Slack and Discord: 3s).
+LLM calls take 2–30s. Coupling them drops messages on the first slow run.
+
+So MIO sits in between:
+
+```
+Channel webhook ─► mio-gateway ─► NATS JetStream ─► AI consumer
+                       ▲                                │
+                       └──── mio-gateway sender ◄───────┘
+```
+
+Gateway acks fast, durably persists to a bus, AI service consumes on its
+own schedule. Bonus: replay for prompt iteration, failure isolation,
+independent scaling, new consumers (analytics, archive) without touching
+the receiver.
+
+## Components
+
+| Component | Lang | Role |
+|---|---|---|
+| `gateway/` | Go | Stateless. One handler per channel for inbound; one consumer pool per channel for outbound. Per-workspace rate limits. |
+| `proto/` | Protobuf | Canonical schema. `Message`, `SendCommand`, `Channel`, `User`, `Attachment`. `buf`-managed, versioned. |
+| `sdk-go/` | Go | Thin NATS wrapper. Idempotency, OTel, Prometheus, schema-version checks. |
+| `sdk-py/` | Python | Same, for the AI side. |
+| `sink-gcs/` | Go | Consumer that writes raw payloads to GCS. Cold storage + analytics substrate. |
+| `examples/echo-consumer/` | Python | Tiny stub proving the loop. The real agents live in MIU. |
+| `playground/` | — | Hands-on rigs for validating design before code. NATS first. |
+| `deploy/` | — | `docker-compose.yml` for local; Helm charts for GKE. |
+
+## Stack
+
+- **Bus**: NATS JetStream (3-replica on GKE; cloud-agnostic)
+- **Schema**: Protobuf via `buf`
+- **Storage**: Postgres + pgvector (operational, in MIU); GCS (raw + analytics)
+- **Workflow**: Hatchet wraps LangGraph
+- **Platform**: GKE for POC; only K8s primitives, no managed lock-in
+- **Local dev**: `docker compose` brings up NATS + Postgres + MinIO
+
+## Quickstart
+
+```bash
+# Coming in P0:
+make up                 # NATS + Postgres + MinIO
+make proto              # buf generate
+
+# Available now:
+cd playground/nats && make up && make bootstrap
+```
+
+## Design rules — non-negotiable
+
+1. **Gateway is dumb.** Validate signature, normalize, publish, ack. No business logic.
+2. **Consumers talk to NATS directly via the SDK.** No proxy service.
+3. **Idempotency at the edge.** `(channel, source_message_id)` unique constraint.
+4. **Per-workspace rate limits, not global.** One chatty tenant must not starve others.
+5. **Per-thread ordering** via single-replica AI consumer with `MaxAckPending=1`.
+6. **Two-step UX for slow LLM calls.** Send "thinking…" immediately, edit-in-place when answered.
+
+See [`plan.md`](plan.md) for the full design doc and phased roadmap.
+
+## Status
+
+POC. Phase tracker:
+
+- [x] **P0** — Repo scaffold (in progress)
+- [ ] **P1** — Proto v1 envelope
+- [ ] **P2** — SDKs (`sdk-go`, `sdk-py`)
+- [ ] **P3** — Gateway + Zoho Cliq inbound
+- [ ] **P4** — `examples/echo-consumer/`
+- [ ] **P5** — Outbound path → Cliq
+- [ ] **P6** — `mio-sink-gcs`
+- [ ] **P7** — Helm charts + NATS on GKE
+- [ ] **P8** — POC deploy on GKE
+- [ ] **P9** — Second channel adapter
+
+## License
+
+Apache-2.0

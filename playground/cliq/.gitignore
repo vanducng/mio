@@ -1,0 +1,10 @@
+secrets.env
+*.local.env
+.env
+
+# cloudflared tunnel credentials + active config
+cloudflared/*.json
+cloudflared/config.yml
+
+# captured events
+appdata/

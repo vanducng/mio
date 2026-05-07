@@ -1,0 +1,31 @@
+services:
+  receiver:
+    build: .
+    image: cliq-receiver:local
+    container_name: cliq-receiver
+    env_file:
+      - .env
+      - secrets.env
+    environment:
+      LISTEN_PORT: "8765"
+      LOG_PATH: /appdata/messages.jsonl
+    volumes:
+      - ./appdata:/appdata
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cliq-cloudflared
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    depends_on:
+      receiver:
+        condition: service_healthy
+    restart: unless-stopped

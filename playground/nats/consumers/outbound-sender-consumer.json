@@ -1,0 +1,11 @@
+{
+  "durable_name": "sender-pool",
+  "deliver_policy": "all",
+  "ack_policy": "explicit",
+  "ack_wait": 15000000000,
+  "max_deliver": 5,
+  "filter_subject": "mio.outbound.>",
+  "replay_policy": "instant",
+  "max_ack_pending": 32,
+  "description": "Gateway sender pool drains MESSAGES_OUTBOUND. Pull-based, parallelism via MaxAckPending."
+}

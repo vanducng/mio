@@ -1,0 +1,33 @@
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: mio-nats-playground
+    command:
+      - "-js"
+      - "-sd=/data"
+      - "-m=8222"
+    ports:
+      - "4222:4222"   # client
+      - "8222:8222"   # monitoring
+    volumes:
+      - ./appdata/jetstream:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+
+  # nats CLI in a container so the host doesn't need it installed.
+  # Usage: docker compose run --rm cli stream ls
+  cli:
+    image: natsio/nats-box:latest
+    container_name: mio-nats-cli
+    depends_on:
+      nats:
+        condition: service_healthy
+    environment:
+      NATS_URL: "nats://nats:4222"
+    volumes:
+      - ./streams:/streams:ro
+      - ./consumers:/consumers:ro
+    entrypoint: ["nats"]
