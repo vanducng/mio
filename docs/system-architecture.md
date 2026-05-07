@@ -1,0 +1,360 @@
+# MIO — System Architecture
+
+> Status: design doc, locked-in for the POC. Last updated 2026-05-07.
+
+MIO is the messaging I/O platform for [MIU](https://github.com/vanducng/miu).
+Channels are messy; agents shouldn't care. MIO normalizes every chat
+surface (Zoho Cliq first, then Slack / Telegram / Discord / …) into one
+canonical envelope so MIU's AI service receives a `Message` and returns
+a `SendCommand` — without ever importing a channel SDK.
+
+This document is the source of truth for **what MIO is**. The phased
+build plan and morning journal live in `plans/plan.md` (local-only).
+
+---
+
+## 1. Why decoupled
+
+Every channel webhook has a hard ack deadline (Slack: 3s, Discord: 3s,
+Cliq: ~5s). LLM calls take 2–30s. Coupling them drops messages on the
+first slow agent run.
+
+MIO sits in between: gateway acks fast, durably persists to a bus, AI
+service consumes on its own schedule. Side benefits:
+
+- **Replay** for prompt iteration and training-data harvest
+- **Failure isolation** between transport and intelligence
+- **Independent scaling** — gateway is bursty/CPU-light, AI is steady/CPU-heavy
+- **New consumers for free** — analytics, archive, audit can subscribe without touching the receiver
+
+---
+
+## 2. Component map
+
+```mermaid
+flowchart LR
+  subgraph Channels
+    cliq[Zoho Cliq]
+    slack[Slack]
+    tg[Telegram]
+    disc[Discord]
+  end
+
+  subgraph "MIO (this repo)"
+    gw["mio-gateway<br/>(Go, stateless)"]
+    bus[("NATS JetStream<br/>3-replica cluster")]
+    sink["mio-sink-gcs<br/>(Go consumer)"]
+    sdkgo["sdk-go"]
+    sdkpy["sdk-py"]
+  end
+
+  subgraph "MIU (separate repo)"
+    ai["AI service<br/>(Python, LangGraph<br/>+ Hatchet)"]
+    pg[(Postgres<br/>+ pgvector)]
+  end
+
+  gcs[(GCS<br/>raw archive)]
+  bq[(BigQuery<br/>external tables)]
+
+  cliq -- webhook --> gw
+  slack -- webhook --> gw
+  tg -- webhook --> gw
+  disc -- webhook --> gw
+
+  gw -- "publish<br/>MESSAGES_INBOUND" --> bus
+  bus -- "consume<br/>(ai-consumer)" --> ai
+  ai --> pg
+  ai -- "publish<br/>MESSAGES_OUTBOUND" --> bus
+  bus -- "consume<br/>(sender-pool)" --> gw
+  gw -- "REST/API call" --> cliq
+  gw -.-> slack
+  gw -.-> tg
+  gw -.-> disc
+
+  bus -- "consume<br/>(gcs-archiver)" --> sink
+  sink --> gcs
+  gcs -. external tables .-> bq
+
+  sdkgo -. used by .-> gw
+  sdkgo -. used by .-> sink
+  sdkpy -. used by .-> ai
+```
+
+Crucial: **the AI service is not in this repo.** MIO ships the SDKs and
+guarantees the envelope; MIU imports `sdk-py` and lives elsewhere. This
+is the boundary that keeps "intelligence" and "transport" separable.
+
+---
+
+## 3. Inbound data flow
+
+The hot path on receive. Every step has a clear owner.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Ch as Channel<br/>(e.g. Zoho Cliq)
+  participant GW as mio-gateway
+  participant DB as Postgres<br/>(idempotency)
+  participant JS as JetStream<br/>MESSAGES_INBOUND
+  participant AI as MIU AI service<br/>(ai-consumer)
+
+  Ch->>GW: POST /webhooks/{channel} (signed)
+  GW->>GW: verify HMAC signature
+  GW->>GW: normalize → mio.v1.Message
+  GW->>DB: INSERT (channel, source_message_id) ON CONFLICT DO NOTHING
+  alt duplicate
+    DB-->>GW: 0 rows
+    GW-->>Ch: 200 OK (silently dedup)
+  else fresh
+    DB-->>GW: 1 row
+    GW->>JS: Publish(subject, payload, Nats-Msg-Id)
+    JS-->>GW: PubAck (seq#)
+    GW-->>Ch: 200 OK
+    Note over GW,Ch: ack inside channel deadline (≤3s)
+  end
+
+  JS->>AI: Pull (ai-consumer, MaxAckPending=1)
+  AI->>AI: LangGraph run (2–30s)
+  AI->>JS: Ack
+  Note over AI: AI may publish "thinking..."<br/>SendCommand immediately,<br/>then edit when done
+```
+
+Latency budget on the gateway path: **target p99 < 500ms**, hard ceiling
+the channel deadline. Anything that doesn't fit (signature verify,
+Postgres upsert, NATS publish) is moved off-path or pre-warmed.
+
+---
+
+## 4. Outbound data flow
+
+The reply path. AI publishes a `SendCommand`; gateway delivers to the
+channel and reports back.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant AI as MIU AI service
+  participant JS as JetStream<br/>MESSAGES_OUTBOUND
+  participant GW as mio-gateway<br/>(sender-pool)
+  participant RL as Per-workspace<br/>rate limiter
+  participant Ch as Channel API
+
+  AI->>JS: Publish SendCommand (workqueue)
+  JS->>GW: Pull (sender-pool, MaxAckPending=N)
+  GW->>RL: token check (workspace_id)
+  alt limited
+    RL-->>GW: deny
+    GW->>JS: Nak with delay
+  else allowed
+    GW->>Ch: REST/API call
+    alt success
+      Ch-->>GW: 200 OK + message_id
+      GW->>JS: Ack
+    else 5xx / network
+      GW->>JS: Nak (retry up to max_deliver)
+    else 4xx (permanent)
+      GW->>JS: TermAck (move to dead-letter)
+    end
+  end
+```
+
+Two-step UX rule: for any LLM run > 1s, the AI service emits a "thinking…"
+`SendCommand` first, then an **edit** `SendCommand` referencing the same
+`channel_message_id` once the real answer is ready. The user never sees
+a blank thread.
+
+---
+
+## 5. Streams and subjects
+
+Two streams, both file-backed, both `mio.v1` envelope.
+
+| Stream | Subject pattern | Retention | Max age | Purpose |
+|---|---|---|---|---|
+| `MESSAGES_INBOUND` | `mio.inbound.>` | `limits` | 7d | Replay-friendly. AI consumer + sink-gcs both subscribe. |
+| `MESSAGES_OUTBOUND` | `mio.outbound.>` | `workqueue` | 23h | Drain semantics. Sender-pool is the only consumer. |
+
+### Subject grammar
+
+```
+mio.<direction>.<channel>.<workspace_id>.<thread_id>[.<message_id>]
+        ▲           ▲           ▲              ▲           ▲
+        │           │           │              │           └─ optional, for edit/delete commands
+        │           │           │              └─ enables per-thread ordering filters
+        │           │           └─ per-workspace rate-limit / multi-tenant scoping
+        │           └─ adapter (zoho-cliq, slack, telegram, discord)
+        └─ inbound | outbound
+```
+
+Examples:
+
+```
+mio.inbound.zoho-cliq.workspace-1.thread-42
+mio.outbound.slack.acme-corp.C0123ABC.1700000000-123456
+mio.outbound.zoho-cliq.workspace-1.thread-42.msg-abc.edit
+```
+
+Why these dimensions live in the subject:
+
+| Dimension | Rationale |
+|---|---|
+| `direction` | One stream per direction; subject prefix lets a single filter scope a consumer cleanly. |
+| `channel` | Per-channel sender pools, per-channel rate-limit buckets, per-channel sinks. |
+| `workspace_id` | Per-workspace rate limits — one chatty tenant must not starve others. |
+| `thread_id` | Future-proofs partition-per-thread when global `MaxAckPending=1` graduates. |
+
+---
+
+## 6. Consumer model
+
+| Consumer | Stream | Type | `MaxAckPending` | Notes |
+|---|---|---|---|---|
+| `ai-consumer` | `MESSAGES_INBOUND` | Pull, durable | **1** | Single-flight. Per-thread ordering enforced globally for now; partition by subject when throughput demands. |
+| `sender-pool` | `MESSAGES_OUTBOUND` | Pull, durable | **32** | Workqueue drain. One pool per channel adapter eventually. |
+| `gcs-archiver` | `MESSAGES_INBOUND` | Pull, durable | 64 | Long-tail consumer; falls behind without affecting AI path. |
+
+Adding a fourth consumer (analytics, training-data tap, audit) is a
+config change, not an engineering task. That's the *whole point* of the
+decoupled bus.
+
+---
+
+## 7. Idempotency, ordering, rate limits
+
+### Idempotency
+
+Two layers, defense in depth:
+
+1. **NATS publish dedup** via `Nats-Msg-Id` header inside the stream's
+   `duplicate_window` (2 min). Catches retries from the gateway itself.
+2. **Postgres unique constraint** on `(channel, source_message_id)`.
+   Authoritative. Catches channel-level redeliveries past the dedup window.
+
+The gateway's loop is: signature verify → upsert → publish → ack. If
+the upsert returns "already exists," we silently 200 the channel and
+skip the publish.
+
+### Ordering
+
+The bus does not order across subjects. We enforce ordering by:
+
+- **Per-stream**: NATS gives FIFO within a stream
+- **Per-thread**: `MaxAckPending=1` on `ai-consumer` makes the consumer
+  effectively single-flight. Slow but correct
+- **Graduation path**: once we need throughput, partition by subject —
+  one consumer per `thread_id` shard. Documented but not built
+
+### Rate limits
+
+Per-workspace token buckets, sized per channel API. Lives in the
+gateway sender-pool, not the bus. Examples:
+
+| Channel | Limit | Source |
+|---|---|---|
+| Zoho Cliq | 10 msg/sec/bot | Cliq REST docs |
+| Slack | 1 msg/sec/channel (chat.postMessage tier 4) | Slack rate-limit docs |
+| Telegram | 30 msg/sec/bot global, 1/sec/chat | Telegram Bot API |
+| Discord | 5 msg/5s/channel | Discord HTTP rate limits |
+
+Burst is fine. The bucket refills; the workqueue retries on Nak.
+
+---
+
+## 8. Storage tiers
+
+Two lifetimes, two access patterns, never shared.
+
+| Tier | Tech | Lifetime | Access pattern | Owner |
+|---|---|---|---|---|
+| Operational | Postgres + pgvector | hot | per-thread, low-latency, transactional | MIU |
+| Bus | NATS JetStream | 7d (in) / 23h (out) | streaming, replayable | MIO |
+| Archive | GCS + BigQuery external tables | indefinite (lifecycle to Coldline) | analytical, batch | MIO |
+
+GCS partitioning: `gs://mio-messages/channel=<channel>/date=YYYY-MM-DD/`.
+Lifecycle: Standard → Nearline @ 30d → Coldline @ 90d. BigQuery external
+tables read directly from GCS — no separate BQ sink, no double-write.
+
+---
+
+## 9. Deployment topology
+
+POC target: GKE.
+
+```mermaid
+flowchart TB
+  subgraph "GKE cluster (regional)"
+    direction TB
+    subgraph "ns: mio"
+      gwd["mio-gateway<br/>Deployment, 2 replicas"]
+      sinkd["mio-sink-gcs<br/>Deployment, 1 replica"]
+      subgraph "StatefulSet: mio-nats (3 replicas)"
+        n0["nats-0<br/>zone-a · pd-ssd"]
+        n1["nats-1<br/>zone-b · pd-ssd"]
+        n2["nats-2<br/>zone-c · pd-ssd"]
+      end
+      promex[Prometheus exporter]
+    end
+    subgraph "ns: miu"
+      aid["AI service<br/>Deployment + Hatchet workers"]
+      pgd[(Postgres + pgvector<br/>StatefulSet)]
+    end
+  end
+
+  ing["Cloud LB / Ingress"] --> gwd
+  gwd <--> n0 & n1 & n2
+  aid <--> n0 & n1 & n2
+  sinkd <--> n0 & n1 & n2
+  sinkd --> gcs[(GCS bucket<br/>via Workload Identity)]
+  promex --> mon["Prometheus / Grafana"]
+```
+
+Stack rules carried over:
+
+- Helm charts in-repo under `deploy/charts/{mio-nats,mio-gateway,mio-sink-gcs}`
+- Only K8s primitives — no Cloud Pub/Sub, no Cloud Run; cloud-agnostic by construction
+- Workload Identity for GCS auth; no service-account JSON files
+- Single regional cluster for POC; multi-region is future work
+
+---
+
+## 10. Observability
+
+Everything emits OpenTelemetry traces and Prometheus metrics. Logs are
+structured JSON via `slog` (Go) and `structlog` (Python).
+
+### Trace correlation
+
+Trace context propagates: channel webhook → gateway → bus header
+(`mio-trace-id`) → AI consumer → outbound publish → sender pool →
+channel API. A single user message produces one root trace covering
+the whole loop.
+
+### Key metrics
+
+| Metric | Owner | Why |
+|---|---|---|
+| `mio_gateway_inbound_latency_seconds{channel,outcome}` | gateway | p99 < 500ms SLO |
+| `mio_gateway_outbound_send_total{channel,workspace,outcome}` | gateway | rate-limit hits, channel errors |
+| `mio_jetstream_consumer_lag{stream,consumer}` | NATS exporter | AI consumer falling behind |
+| `mio_sink_gcs_bytes_written_total{channel}` | sink-gcs | archive throughput |
+| `mio_idempotency_dedup_total{channel}` | gateway | redelivery rate sanity |
+
+---
+
+## 11. Non-goals (explicit)
+
+- **No UI in MIO.** Workspace OAuth onboarding lives in MIU's admin console.
+- **No staging cluster.** Solo dev scale; feature flags + fast rollback.
+- **No multiple channel adapters on day one.** Cliq POC first, generalize after.
+- **No AI agent code in this repo.** Agents live in MIU.
+- **No dedicated BigQuery sink.** GCS + external tables.
+- **No managed cloud bus.** NATS JetStream — cloud-agnostic by construction.
+
+---
+
+## 12. Open questions
+
+- Per-thread ordering: stay global `MaxAckPending=1` or shard-by-subject? Decide when first throughput regression appears.
+- Edit semantics across channels: Slack and Cliq both support edits with the original `channel_message_id`; Telegram supports `edit_message_text`; Discord requires the original message be from the same bot. The `SendCommand.edit_of` field needs a per-channel resolver — design at P5, not now.
+- Dead-letter strategy: separate `MESSAGES_DLQ` stream vs in-place `terminated` flag? Defer until we hit a real channel-permanent failure in the wild.
