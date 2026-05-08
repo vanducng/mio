@@ -1,0 +1,1533 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>mio — durable messaging fabric for AI agents</title>
+  <meta name="description" content="mio is the messaging substrate AI agents need: exactly-once delivery, crash-safe state, replayable history, and a normalized envelope across Slack, Discord, Telegram, WhatsApp, Messenger, Google Chat, Teams, Zoho Cliq, Line — built on NATS JetStream." />
+  <style>
+    :root {
+      /* Discord-inspired dark surface */
+      --bg-deep:      #0f1014;
+      --bg-tertiary:  #1e1f22;
+      --bg-secondary: #2b2d31;
+      --bg-primary:   #313338;
+      --bg-floating:  #111214;
+
+      --header-primary:   #f2f3f5;
+      --header-secondary: #b5bac1;
+      --text-normal:      #dbdee1;
+      --text-muted:       #949ba4;
+      --text-link:        #00a8fc;
+
+      --blurple:       #5865f2;
+      --blurple-hover: #4752c4;
+      --blurple-soft:  #7289da;
+      --status-online: #23a55a;
+      --status-warn:   #f0b232;
+      --status-dnd:    #f23f43;
+
+      --border-subtle:  #3f4147;
+      --divider:        rgba(255,255,255,0.06);
+
+      --font-body:    'gg sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+      --font-display: 'gg sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+      --font-mono:    'gg mono', 'JetBrains Mono', ui-monospace, Menlo, monospace;
+
+      --max-w: 1180px;
+      --section-y: 112px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg-deep);
+      color: var(--text-normal);
+      font-family: var(--font-body);
+      font-size: 16px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+    a { color: var(--text-link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .container { max-width: var(--max-w); margin: 0 auto; padding: 0 24px; }
+
+    /* ─── Top nav ───────────────────────────────────────────── */
+    header.topnav {
+      position: sticky; top: 0; z-index: 80;
+      background: color-mix(in oklch, var(--bg-deep) 78%, transparent);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--divider);
+      transition: padding 240ms ease;
+    }
+    .nav { display: flex; align-items: center; justify-content: space-between; padding: 16px 0; }
+    .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--header-primary); font-weight: 700; font-size: 18px; letter-spacing: -0.01em; }
+    .brand-mark {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: conic-gradient(from 220deg, var(--blurple), var(--blurple-soft), #00a8fc, var(--blurple));
+      display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 14px; letter-spacing: -0.04em;
+      box-shadow: 0 0 24px rgba(88,101,242,0.4);
+    }
+    .nav-links { display: flex; align-items: center; gap: 28px; }
+    .nav-links a { color: var(--header-secondary); font-size: 14px; font-weight: 500; }
+    .nav-links a:hover { color: var(--header-primary); text-decoration: none; }
+    .btn { display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: 6px; font-family: inherit; font-size: 14px; font-weight: 600; letter-spacing: -0.005em; cursor: pointer; border: 0; transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease; }
+    .btn-primary { background: var(--blurple); color: #fff; box-shadow: 0 0 0 0 rgba(88,101,242,0.5); }
+    .btn-primary:hover { background: var(--blurple-hover); transform: translateY(-1px); box-shadow: 0 8px 24px -8px rgba(88,101,242,0.6); text-decoration: none; }
+    .btn-secondary { background: #4e5058; color: #fff; }
+    .btn-secondary:hover { background: #6d6f78; transform: translateY(-1px); text-decoration: none; }
+    .btn-ghost { background: transparent; color: var(--text-normal); border: 1px solid var(--border-subtle); }
+    .btn-ghost:hover { background: rgba(255,255,255,0.04); text-decoration: none; }
+
+    /* ─── Hero ──────────────────────────────────────────────── */
+    .hero { padding: 96px 0 64px; position: relative; overflow: hidden; }
+    .hero::before {
+      content: ''; position: absolute; inset: 0;
+      background:
+        radial-gradient(50% 60% at 50% 0%, rgba(88,101,242,0.22) 0%, transparent 60%),
+        radial-gradient(40% 40% at 85% 30%, rgba(0,168,252,0.10) 0%, transparent 70%),
+        radial-gradient(40% 50% at 15% 60%, rgba(35,165,90,0.08) 0%, transparent 70%);
+      pointer-events: none;
+      animation: heroDrift 18s ease-in-out infinite alternate;
+    }
+    @keyframes heroDrift {
+      0%   { transform: translate3d(0,0,0); }
+      100% { transform: translate3d(20px,-10px,0); }
+    }
+    .hero-inner { position: relative; text-align: center; max-width: 880px; margin: 0 auto; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border: 1px solid var(--border-subtle); border-radius: 999px; background: rgba(43,45,49,0.6); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.04em; color: var(--header-secondary); margin-bottom: 28px; }
+    .eyebrow .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--status-online); position: relative; }
+    .eyebrow .dot::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--status-online); animation: pulse 1.6s ease-out infinite; }
+    @keyframes pulse {
+      0%   { transform: scale(0.6); opacity: 0.7; }
+      100% { transform: scale(1.8); opacity: 0; }
+    }
+    .hero h1 { font-family: var(--font-display); font-size: clamp(40px, 6.4vw, 72px); font-weight: 800; line-height: 1.02; letter-spacing: -0.03em; margin: 0 0 24px; color: var(--header-primary); }
+    .hero h1 .accent { background: linear-gradient(135deg, var(--blurple) 0%, #00a8fc 50%, var(--blurple-soft) 100%); background-size: 200% 200%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: shimmer 6s linear infinite; }
+    @keyframes shimmer { 0% { background-position: 0% 50%; } 100% { background-position: 200% 50%; } }
+    .hero p.lead { font-size: 19px; line-height: 1.55; color: var(--header-secondary); max-width: 640px; margin: 0 auto 36px; }
+    .hero-ctas { display: inline-flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-bottom: 22px; }
+    .hero-ctas .btn { padding: 13px 24px; font-size: 15px; }
+    .hero-meta { display: inline-flex; gap: 22px; flex-wrap: wrap; justify-content: center; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.04em; }
+    .hero-meta span::before { content: '✓'; color: var(--status-online); margin-right: 6px; }
+
+    /* ─── Animated bus visual under hero ───────────────────── */
+    .bus-vis {
+      position: relative;
+      max-width: 920px;
+      margin: 64px auto 0;
+      height: 280px;
+    }
+    .bus-vis svg { width: 100%; height: 100%; overflow: visible; }
+    .bus-track { stroke: var(--border-subtle); stroke-width: 2; fill: none; stroke-dasharray: 6 6; }
+    .bus-pipe {
+      stroke: url(#busGradient); stroke-width: 4; fill: none; stroke-linecap: round;
+      filter: drop-shadow(0 0 12px rgba(88,101,242,0.5));
+    }
+    .bus-node-label { font-family: var(--font-mono); font-size: 10px; fill: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; }
+    .bus-source, .bus-sink {
+      width: 56px; height: 56px;
+      position: absolute;
+      transform: translate(-50%, -50%);
+      border-radius: 14px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      display: grid; place-items: center;
+      box-shadow: 0 8px 24px -10px rgba(0,0,0,0.6);
+      transition: transform 220ms ease;
+    }
+    .bus-source:hover, .bus-sink:hover { transform: translate(-50%, -50%) scale(1.08); }
+    .bus-source svg, .bus-sink svg { width: 32px; height: 32px; }
+    .bus-core {
+      position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      padding: 14px 28px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--blurple) 0%, var(--blurple-hover) 100%);
+      color: #fff;
+      font-family: var(--font-display); font-weight: 700; font-size: 18px;
+      letter-spacing: -0.01em;
+      box-shadow: 0 0 60px rgba(88,101,242,0.5);
+      text-align: center;
+    }
+    .bus-core .meta { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; color: rgba(255,255,255,0.85); margin-top: 4px; text-transform: uppercase; }
+    .bus-particle { fill: #00d4ff; }
+    @keyframes flow {
+      0%   { offset-distance: 0%; opacity: 0; }
+      8%   { opacity: 1; }
+      92%  { opacity: 1; }
+      100% { offset-distance: 100%; opacity: 0; }
+    }
+
+    /* ─── Section base ─────────────────────────────────────── */
+    section { padding: var(--section-y) 0; position: relative; }
+    .section-head { text-align: center; max-width: 720px; margin: 0 auto 64px; }
+    .section-head .kicker { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--blurple-soft); margin: 0 0 14px; }
+    .section-head h2 { font-family: var(--font-display); font-size: clamp(30px, 4.2vw, 46px); font-weight: 800; line-height: 1.12; letter-spacing: -0.025em; color: var(--header-primary); margin: 0 0 16px; }
+    .section-head p { font-size: 17px; color: var(--header-secondary); margin: 0; }
+
+    /* ─── Channels orbit ───────────────────────────────────── */
+    .channels {
+      padding: 72px 0;
+      border-top: 1px solid var(--divider);
+      border-bottom: 1px solid var(--divider);
+      background: linear-gradient(180deg, var(--bg-deep), var(--bg-tertiary));
+    }
+    .channels-row {
+      display: flex; align-items: center; justify-content: center;
+      flex-wrap: wrap; gap: 18px 22px;
+    }
+    .ch-chip {
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 10px 16px 10px 10px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 999px;
+      font-family: var(--font-display); font-weight: 600; font-size: 14px;
+      color: var(--header-primary);
+      transition: transform 240ms ease, border-color 240ms ease, background 240ms ease;
+      animation: floatY 6s ease-in-out infinite;
+    }
+    .ch-chip:nth-child(2)  { animation-delay: -0.4s; }
+    .ch-chip:nth-child(3)  { animation-delay: -0.8s; }
+    .ch-chip:nth-child(4)  { animation-delay: -1.2s; }
+    .ch-chip:nth-child(5)  { animation-delay: -1.6s; }
+    .ch-chip:nth-child(6)  { animation-delay: -2.0s; }
+    .ch-chip:nth-child(7)  { animation-delay: -2.4s; }
+    .ch-chip:nth-child(8)  { animation-delay: -2.8s; }
+    .ch-chip:nth-child(9)  { animation-delay: -3.2s; }
+    .ch-chip:nth-child(10) { animation-delay: -3.6s; }
+    @keyframes floatY {
+      0%, 100% { transform: translateY(0); }
+      50%      { transform: translateY(-6px); }
+    }
+    .ch-chip:hover { border-color: var(--blurple); background: var(--bg-primary); transform: translateY(-3px); }
+    .ch-chip .ch-logo { width: 26px; height: 26px; flex: 0 0 26px; }
+    /* Global rule: every .ch-logo container constrains its inner SVG.
+       Without this, <svg><use href> renders at its intrinsic size
+       (often 300x150) and bursts out of small containers. */
+    .ch-logo svg { width: 100%; height: 100%; display: block; border-radius: 6px; }
+    .channels-caption { text-align: center; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.1em; margin: 0 0 32px; text-transform: uppercase; }
+
+    /* ─── Why this exists (problem cards) ──────────────────── */
+    .problem-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .problem {
+      padding: 28px 24px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      position: relative;
+      overflow: hidden;
+    }
+    .problem::before {
+      content: ''; position: absolute; inset: -1px; border-radius: 14px; padding: 1px;
+      background: linear-gradient(135deg, transparent 50%, rgba(88,101,242,0.5));
+      -webkit-mask: linear-gradient(#000, #000) content-box, linear-gradient(#000, #000);
+      -webkit-mask-composite: xor; mask-composite: exclude;
+      opacity: 0; transition: opacity 280ms ease;
+      pointer-events: none;
+    }
+    .problem:hover::before { opacity: 1; }
+    .problem .num { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; color: var(--status-dnd); margin-bottom: 12px; display: block; }
+    .problem h3 { font-family: var(--font-display); font-size: 17px; font-weight: 700; color: var(--header-primary); margin: 0 0 10px; letter-spacing: -0.01em; }
+    .problem p { font-size: 14px; color: var(--text-muted); line-height: 1.6; margin: 0; }
+
+    /* ─── Features grid (10) ───────────────────────────────── */
+    .features-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .feat {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 26px 24px;
+      transition: transform 240ms ease, border-color 240ms ease, background 240ms ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .feat:hover { transform: translateY(-4px); border-color: var(--blurple); background: var(--bg-primary); }
+    .feat .icon { width: 38px; height: 38px; border-radius: 10px; background: rgba(88,101,242,0.14); color: var(--blurple-soft); display: grid; place-items: center; margin-bottom: 16px; }
+    .feat .icon svg { width: 19px; height: 19px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .feat h3 { font-family: var(--font-display); font-size: 16px; font-weight: 700; color: var(--header-primary); margin: 0 0 8px; letter-spacing: -0.01em; }
+    .feat p { font-size: 13.5px; line-height: 1.55; color: var(--text-muted); margin: 0; }
+
+    /* ─── Architecture diagram ─────────────────────────────── */
+    .arch { background: linear-gradient(180deg, var(--bg-tertiary), var(--bg-deep)); border-top: 1px solid var(--divider); border-bottom: 1px solid var(--divider); }
+    .arch-board {
+      max-width: 940px;
+      margin: 0 auto;
+      background: var(--bg-floating);
+      border: 1px solid var(--border-subtle);
+      border-radius: 18px;
+      padding: 40px 28px;
+      position: relative;
+      overflow: hidden;
+    }
+    .arch-row { display: grid; gap: 12px; }
+    .arch-row.sources { grid-template-columns: repeat(5, 1fr); margin-bottom: 24px; }
+    .arch-row.sources.second { grid-template-columns: repeat(4, 1fr); padding-inline: 10%; }
+    .arch-row.sources .arch-node { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 8px; }
+    .arch-bus {
+      background: linear-gradient(90deg, rgba(88,101,242,0.10), rgba(88,101,242,0.28), rgba(88,101,242,0.10));
+      border: 1px solid var(--blurple);
+      border-radius: 14px;
+      padding: 22px 24px;
+      text-align: center;
+      margin: 8px 0;
+      position: relative;
+      overflow: hidden;
+    }
+    .arch-bus::after {
+      content: ''; position: absolute; inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(88,101,242,0.4), transparent);
+      animation: scan 4s linear infinite;
+    }
+    @keyframes scan {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+    .arch-bus .label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--blurple-soft); margin-bottom: 6px; position: relative; z-index: 1; }
+    .arch-bus .name { font-family: var(--font-display); font-weight: 700; font-size: 18px; color: #fff; letter-spacing: -0.01em; position: relative; z-index: 1; }
+    .arch-bus .meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-normal); margin-top: 6px; letter-spacing: 0.04em; position: relative; z-index: 1; }
+    .arch-row.sinks { grid-template-columns: repeat(4, 1fr); margin-top: 24px; }
+    .arch-node {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 10px;
+      padding: 12px 8px;
+      text-align: center;
+      font-family: var(--font-display);
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--header-primary);
+    }
+    .arch-node .name { font-size: 12px; }
+    .arch-node .ch-logo { width: 24px; height: 24px; }
+    .arch-row.sinks .arch-node {
+      padding: 14px 12px;
+      display: flex; flex-direction: column; align-items: center; gap: 6px;
+    }
+    .arch-row.sinks .arch-node .icon-mini {
+      width: 26px; height: 26px; border-radius: 8px;
+      background: rgba(88,101,242,0.14); color: var(--blurple-soft);
+      display: grid; place-items: center;
+    }
+    .arch-row.sinks .arch-node .icon-mini svg { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
+    .arch-arrow { text-align: center; color: var(--blurple-soft); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.08em; margin: 4px 0; text-transform: uppercase; opacity: 0.7; }
+
+    /* ─── Code example ─────────────────────────────────────── */
+    .code-wrap {
+      max-width: 760px;
+      margin: 0 auto;
+      background: var(--bg-floating);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      box-shadow: 0 24px 60px -20px rgba(0,0,0,0.6);
+      overflow: hidden;
+    }
+    .term-bar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--divider);
+      background: var(--bg-secondary);
+    }
+    .term-bar .tlight { width: 12px; height: 12px; border-radius: 50%; background: #4e5058; }
+    .term-bar .tlight.r { background: var(--status-dnd); }
+    .term-bar .tlight.y { background: var(--status-warn); }
+    .term-bar .tlight.g { background: var(--status-online); }
+    .term-bar .ttitle { margin-left: 12px; font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); }
+    .term-tabs { margin-left: auto; display: flex; gap: 6px; }
+    .term-tab { padding: 4px 10px; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); border-radius: 5px; cursor: pointer; transition: background 160ms ease, color 160ms ease; }
+    .term-tab.active { background: var(--bg-floating); color: var(--header-primary); }
+    .term-body {
+      padding: 22px 24px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      line-height: 1.65;
+      color: var(--text-normal);
+      white-space: pre;
+      overflow-x: auto;
+      min-height: 280px;
+    }
+    .term-body .c { color: var(--text-muted); }
+    .term-body .k { color: #c586c0; }
+    .term-body .s { color: var(--status-online); }
+    .term-body .v { color: var(--status-warn); }
+    .term-body .str { color: #ce9178; }
+    .term-body .fn { color: #dcdcaa; }
+    .term-body .lit { color: #569cd6; }
+    .caret { display: inline-block; width: 8px; height: 16px; background: var(--blurple-soft); animation: blink 1s steps(1) infinite; vertical-align: -2px; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ─── Use cases ────────────────────────────────────────── */
+    .usecase-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+    .usecase {
+      display: grid;
+      grid-template-columns: 1.1fr 1fr;
+      gap: 28px;
+      align-items: center;
+      padding: 28px 28px 28px 32px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 18px;
+      transition: transform 240ms ease, border-color 240ms ease;
+    }
+    .usecase:hover { transform: translateY(-3px); border-color: var(--border-subtle); }
+    .usecase-content { min-width: 0; }
+    .usecase .role { display: inline-flex; align-items: center; gap: 8px; padding: 5px 11px; border-radius: 999px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 14px; font-weight: 600; }
+    .usecase[data-theme="support"]   .role { background: rgba(0,168,252,0.14);  color: #4cc9ff; }
+    .usecase[data-theme="sales"]     .role { background: rgba(242,63,67,0.14);  color: #ff7378; }
+    .usecase[data-theme="ops"]       .role { background: rgba(35,165,90,0.14);  color: #5fd089; }
+    .usecase[data-theme="voc"]       .role { background: rgba(240,178,50,0.14); color: #ffd270; }
+    .usecase h3 { font-family: var(--font-display); font-size: 22px; font-weight: 700; color: var(--header-primary); margin: 0 0 12px; letter-spacing: -0.015em; line-height: 1.2; }
+    .usecase p { font-size: 14.5px; color: var(--text-muted); line-height: 1.6; margin: 0 0 18px; }
+    .usecase .channels-mini { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .usecase .channels-mini .ch-logo {
+      width: 24px; height: 24px;
+      flex: 0 0 24px;
+      display: inline-block;
+      transition: transform 220ms ease;
+    }
+    .usecase .channels-mini .ch-logo svg { width: 100%; height: 100%; display: block; border-radius: 6px; }
+    .usecase .channels-mini .ch-logo:hover { transform: scale(1.18); }
+
+    /* visual frame shared by all four cards */
+    .usecase-visual {
+      position: relative;
+      height: 240px;
+      border-radius: 14px;
+      background:
+        radial-gradient(80% 100% at 50% 0%, rgba(255,255,255,0.04), transparent 60%),
+        var(--bg-floating);
+      border: 1px solid var(--border-subtle);
+      overflow: hidden;
+    }
+    .usecase-visual .v-grid {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 24px 24px;
+      mask: radial-gradient(circle at center, #000 50%, transparent 100%);
+      -webkit-mask: radial-gradient(circle at center, #000 50%, transparent 100%);
+    }
+
+    /* ── Visual 1 · Multi-region clocks (support) ────────── */
+    .uv-clocks { display: grid; grid-template-columns: repeat(3, 1fr); align-items: end; height: 100%; padding: 22px 18px 18px; gap: 10px; position: relative; z-index: 1; }
+    .uv-clock { display: flex; flex-direction: column; align-items: center; gap: 8px; position: relative; }
+    .uv-clock .face {
+      width: 48px; height: 48px; border-radius: 50%;
+      background: var(--bg-secondary);
+      border: 1.5px solid var(--border-subtle);
+      position: relative;
+    }
+    .uv-clock .face::before { content: ''; position: absolute; left: 50%; top: 50%; width: 2px; height: 16px; background: var(--header-secondary); border-radius: 1px; transform-origin: center 100%; transform: translate(-50%, -100%) rotate(var(--h, 0deg)); }
+    .uv-clock .face::after  { content: ''; position: absolute; left: 50%; top: 50%; width: 1.5px; height: 20px; background: var(--blurple-soft); border-radius: 1px; transform-origin: center 100%; transform: translate(-50%, -100%) rotate(var(--m, 0deg)); }
+    .uv-clock .face .pivot { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; border-radius: 50%; background: var(--blurple); transform: translate(-50%, -50%); }
+    .uv-clock .city { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; color: var(--text-muted); text-transform: uppercase; }
+    .uv-clock .time { font-family: var(--font-mono); font-size: 11px; color: var(--header-primary); font-weight: 600; }
+    /* incoming chat bubbles above each clock */
+    .uv-bubble {
+      position: absolute;
+      left: 50%; top: 0;
+      transform: translateX(-50%);
+      width: 30px; height: 30px;
+      border-radius: 10px;
+      display: grid; place-items: center;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      box-shadow: 0 6px 14px -6px rgba(0,0,0,0.6);
+      opacity: 0;
+      animation: bubblePop 5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+    }
+    .uv-bubble svg { width: 22px; height: 22px; border-radius: 6px; }
+    .uv-clock:nth-child(1) .uv-bubble { animation-delay: 0s; }
+    .uv-clock:nth-child(2) .uv-bubble { animation-delay: 1.6s; }
+    .uv-clock:nth-child(3) .uv-bubble { animation-delay: 3.2s; }
+    @keyframes bubblePop {
+      0%,  4%   { opacity: 0; transform: translate(-50%, 18px) scale(0.6); }
+      8%,  18%  { opacity: 1; transform: translate(-50%, 0)    scale(1); }
+      24%, 100% { opacity: 0; transform: translate(-50%, -10px) scale(0.9); }
+    }
+    .uv-orbit-line {
+      position: absolute; left: 0; right: 0; bottom: 70px; height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(88,101,242,0.4), transparent);
+    }
+    .uv-orbit-dot {
+      position: absolute; bottom: 67px; left: 0;
+      width: 5px; height: 5px; border-radius: 50%;
+      background: var(--blurple-soft);
+      box-shadow: 0 0 8px var(--blurple);
+      animation: orbitMove 6s linear infinite;
+    }
+    @keyframes orbitMove {
+      0%   { left: -2%;   opacity: 0; }
+      10%  { opacity: 1; }
+      90%  { opacity: 1; }
+      100% { left: 102%;  opacity: 0; }
+    }
+
+    /* ── Visual 2 · Crash-and-recover heartbeat (sales) ──── */
+    .uv-pulse { position: absolute; inset: 0; padding: 18px; }
+    .uv-pulse svg { width: 100%; height: 100%; }
+    .uv-pulse .grid-line { stroke: var(--border-subtle); stroke-width: 1; opacity: 0.35; }
+    .uv-pulse .baseline {
+      stroke: var(--status-online);
+      stroke-width: 2.4;
+      fill: none;
+      stroke-linecap: round; stroke-linejoin: round;
+      filter: drop-shadow(0 0 6px rgba(35,165,90,0.6));
+      stroke-dasharray: 800;
+      stroke-dashoffset: 800;
+      animation: heartbeatDraw 5.4s ease-in-out infinite;
+    }
+    .uv-pulse .crash-marker {
+      fill: var(--status-dnd);
+      opacity: 0;
+      animation: crashFlash 5.4s ease-in-out infinite;
+    }
+    .uv-pulse .resume-marker {
+      fill: var(--status-online);
+      opacity: 0;
+      animation: resumeFlash 5.4s ease-in-out infinite;
+    }
+    .uv-pulse .label {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      opacity: 0;
+    }
+    .uv-pulse .crash-label  { fill: var(--status-dnd);    animation: crashFlash 5.4s ease-in-out infinite; }
+    .uv-pulse .resume-label { fill: var(--status-online); animation: resumeFlash 5.4s ease-in-out infinite; }
+    @keyframes heartbeatDraw {
+      0%   { stroke-dashoffset: 800; }
+      85%  { stroke-dashoffset: 0;   }
+      100% { stroke-dashoffset: 0;   }
+    }
+    @keyframes crashFlash {
+      0%, 38% { opacity: 0; }
+      42%, 58% { opacity: 1; }
+      62%, 100% { opacity: 0.4; }
+    }
+    @keyframes resumeFlash {
+      0%, 70% { opacity: 0; }
+      78%, 90% { opacity: 1; }
+      100% { opacity: 0.6; }
+    }
+    .uv-pulse .ts {
+      font-family: var(--font-mono);
+      font-size: 9px;
+      fill: var(--text-muted);
+      letter-spacing: 0.05em;
+    }
+
+    /* ── Visual 3 · Live deploy terminal (ops) ───────────── */
+    .uv-term {
+      position: absolute; inset: 18px;
+      background: #000;
+      border-radius: 8px;
+      border: 1px solid var(--border-subtle);
+      overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+    .uv-term-bar {
+      flex: 0 0 22px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex; align-items: center; gap: 5px; padding: 0 8px;
+    }
+    .uv-term-bar .l { width: 8px; height: 8px; border-radius: 50%; background: #4e5058; }
+    .uv-term-bar .l.r { background: var(--status-dnd); }
+    .uv-term-bar .l.y { background: var(--status-warn); }
+    .uv-term-bar .l.g { background: var(--status-online); }
+    .uv-term-bar .t { margin-left: auto; font-family: var(--font-mono); font-size: 9px; color: var(--text-muted); letter-spacing: 0.06em; }
+    .uv-term-body {
+      flex: 1;
+      padding: 12px 14px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.5;
+      color: var(--text-normal);
+    }
+    .uv-line { white-space: pre; }
+    .uv-line .prompt { color: var(--blurple-soft); }
+    .uv-line .ok     { color: var(--status-online); }
+    .uv-line .warn   { color: var(--status-warn); }
+    .uv-line .muted  { color: var(--text-muted); }
+
+    .uv-typed {
+      display: inline-block;
+      overflow: hidden;
+      white-space: nowrap;
+      border-right: 6px solid transparent;
+      animation: typeCmd 6s steps(22, end) infinite;
+      vertical-align: bottom;
+    }
+    @keyframes typeCmd {
+      0%       { width: 0;     border-right-color: var(--blurple-soft); }
+      35%      { width: 12.6em; border-right-color: var(--blurple-soft); }
+      40%      { width: 12.6em; border-right-color: transparent; }
+      100%     { width: 12.6em; border-right-color: transparent; }
+    }
+
+    .uv-line-2, .uv-line-3, .uv-line-4 { opacity: 0; animation: termReveal 6s steps(1) infinite; }
+    .uv-line-2 { animation-delay: -2.4s; }
+    .uv-line-3 { animation-delay: -1.5s; }
+    .uv-line-4 { animation-delay: -0.6s; }
+    @keyframes termReveal {
+      0%, 60% { opacity: 0; }
+      62%, 96% { opacity: 1; }
+      100% { opacity: 0; }
+    }
+
+    .uv-spinner { display: inline-block; width: 10px; }
+    .uv-spinner::before {
+      content: '|';
+      display: inline-block;
+      animation: spin 0.6s steps(4) infinite;
+    }
+    @keyframes spin {
+      0%   { content: '|'; }
+      25%  { content: '/'; }
+      50%  { content: '—'; }
+      75%  { content: '\\'; }
+    }
+
+    /* ── Visual 4 · Replay scrubber (voc) ────────────────── */
+    .uv-replay {
+      position: absolute; inset: 0;
+      padding: 24px 22px 18px;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .uv-replay-head {
+      display: flex; align-items: center; justify-content: space-between;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--text-muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+    .uv-replay-head .live { color: var(--status-warn); }
+    .uv-replay-rows {
+      flex: 1;
+      display: flex; flex-direction: column; gap: 8px;
+      position: relative;
+    }
+    .uv-row {
+      display: grid;
+      grid-template-columns: 60px 1fr;
+      align-items: center;
+      gap: 10px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+    }
+    .uv-row .label { display: flex; align-items: center; gap: 5px; }
+    .uv-row .label svg { width: 12px; height: 12px; border-radius: 3px; }
+    .uv-row .bar {
+      height: 8px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-subtle);
+      border-radius: 999px;
+      overflow: hidden;
+      position: relative;
+      display: flex;
+    }
+    .uv-row .bar::before {
+      content: '';
+      width: var(--w-old, 40%);
+      background: linear-gradient(90deg, var(--blurple), var(--blurple-soft));
+    }
+    .uv-row .bar::after {
+      content: '';
+      width: var(--w-new, 30%);
+      background: linear-gradient(90deg, var(--status-warn), #ff9c40);
+      opacity: 0;
+      animation: diffReveal 4.2s ease-in-out infinite;
+    }
+    .uv-row:nth-child(1) .bar::after { animation-delay: 0.2s; }
+    .uv-row:nth-child(2) .bar::after { animation-delay: 0.6s; }
+    .uv-row:nth-child(3) .bar::after { animation-delay: 1.0s; }
+    .uv-row:nth-child(4) .bar::after { animation-delay: 1.4s; }
+    @keyframes diffReveal {
+      0%, 30%  { opacity: 0; transform: translateX(-6px); }
+      45%, 80% { opacity: 1; transform: translateX(0); }
+      100%     { opacity: 0; }
+    }
+    .uv-scrubber {
+      position: absolute;
+      top: 0; bottom: 0; left: 0;
+      width: 2px;
+      background: linear-gradient(to bottom, transparent, var(--status-warn), transparent);
+      box-shadow: 0 0 8px var(--status-warn);
+      animation: scrub 4.2s ease-in-out infinite;
+    }
+    @keyframes scrub {
+      0%   { left: 0%;   opacity: 0; }
+      10%  { opacity: 1; }
+      90%  { opacity: 1; }
+      100% { left: 100%; opacity: 0; }
+    }
+    .uv-replay-foot {
+      display: flex; align-items: center; gap: 8px;
+      font-family: var(--font-mono); font-size: 9px;
+      color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase;
+    }
+    .uv-replay-foot .swatch {
+      width: 8px; height: 8px; border-radius: 2px;
+    }
+
+    /* ─── Stats with count-up ──────────────────────────────── */
+    .stats {
+      background: linear-gradient(180deg, var(--bg-deep), var(--bg-tertiary));
+      border-top: 1px solid var(--divider);
+      border-bottom: 1px solid var(--divider);
+    }
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; text-align: center; }
+    .stat .num { font-family: var(--font-display); font-size: 50px; font-weight: 800; letter-spacing: -0.03em; color: var(--header-primary); line-height: 1; margin-bottom: 10px; background: linear-gradient(135deg, #fff 30%, var(--blurple-soft)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .stat .num .u { font-size: 26px; -webkit-text-fill-color: var(--text-muted); color: var(--text-muted); margin-left: 2px; background: none; }
+    .stat .label { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; }
+
+    /* ─── Footer CTA band ──────────────────────────────────── */
+    .cta-band {
+      background:
+        radial-gradient(60% 80% at 50% 50%, rgba(0,168,252,0.25) 0%, transparent 70%),
+        linear-gradient(135deg, var(--blurple) 0%, var(--blurple-hover) 100%);
+      padding: 88px 0;
+      text-align: center;
+      color: #fff;
+      position: relative;
+      overflow: hidden;
+    }
+    .cta-band::before {
+      content: ''; position: absolute; inset: 0;
+      background:
+        radial-gradient(2px 2px at 20% 30%, rgba(255,255,255,0.6), transparent 50%),
+        radial-gradient(2px 2px at 80% 70%, rgba(255,255,255,0.5), transparent 50%),
+        radial-gradient(1.5px 1.5px at 50% 20%, rgba(255,255,255,0.4), transparent 50%),
+        radial-gradient(1.5px 1.5px at 70% 40%, rgba(255,255,255,0.4), transparent 50%),
+        radial-gradient(1px 1px at 30% 80%, rgba(255,255,255,0.5), transparent 50%);
+      animation: starfield 30s linear infinite;
+      pointer-events: none;
+    }
+    @keyframes starfield {
+      0%   { transform: translate3d(0,0,0); }
+      100% { transform: translate3d(-40px,-30px,0); }
+    }
+    .cta-band h2 { font-family: var(--font-display); font-size: clamp(28px, 4vw, 46px); font-weight: 800; letter-spacing: -0.025em; line-height: 1.1; margin: 0 0 16px; position: relative; }
+    .cta-band p { font-size: 17px; color: rgba(255,255,255,0.88); max-width: 580px; margin: 0 auto 32px; position: relative; }
+    .cta-band .btn-primary { background: #fff; color: var(--blurple); padding: 14px 26px; font-size: 15px; position: relative; }
+    .cta-band .btn-primary:hover { background: #f2f3f5; }
+    .cta-band .btn-ghost { color: #fff; border-color: rgba(255,255,255,0.4); position: relative; }
+    .cta-band .btn-ghost:hover { background: rgba(255,255,255,0.1); }
+
+    /* ─── Footer ───────────────────────────────────────────── */
+    footer.site { padding: 40px 0; border-top: 1px solid var(--divider); background: var(--bg-deep); }
+    .footer-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+    .footer-links { display: flex; gap: 22px; }
+    .footer-links a { color: var(--text-muted); font-size: 13px; }
+    .footer-links a:hover { color: var(--header-primary); text-decoration: none; }
+    .copy { color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.04em; }
+
+    /* reveal-on-scroll */
+    .reveal { opacity: 0; transform: translateY(20px); transition: opacity 700ms ease, transform 700ms cubic-bezier(0.215, 0.61, 0.355, 1); }
+    .reveal.in { opacity: 1; transform: none; }
+
+    /* ─── Responsive ───────────────────────────────────────── */
+    @media (max-width: 960px) {
+      :root { --section-y: 80px; }
+      .features-grid, .problem-grid { grid-template-columns: 1fr 1fr; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+      .arch-row.sources { grid-template-columns: repeat(5, 1fr); }
+      .arch-row.sinks   { grid-template-columns: repeat(2, 1fr); }
+      .usecase { grid-template-columns: 1fr; }
+      .usecase-visual { height: 200px; }
+      .bus-vis { height: 240px; }
+    }
+    @media (max-width: 640px) {
+      :root { --section-y: 56px; }
+      .nav-links { display: none; }
+      .features-grid, .problem-grid, .pricing-grid, .stats-grid { grid-template-columns: 1fr; }
+      .hero p.lead { font-size: 17px; }
+      .arch-row.sources { grid-template-columns: repeat(3, 1fr); }
+      .arch-row.sinks   { grid-template-columns: 1fr 1fr; }
+      .bus-vis { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ─── Reusable channel-logo SVG defs (one place, used everywhere) ─── -->
+  <svg width="0" height="0" style="position: absolute;" aria-hidden="true">
+    <defs>
+
+      <!-- Slack: 4-color hash tiles -->
+      <symbol id="lg-slack" viewBox="0 0 24 24">
+        <path fill="#36C5F0" d="M5.5 14.5a1.6 1.6 0 1 1-1.6-1.6h1.6zM6.3 14.5a1.6 1.6 0 1 1 3.2 0v4a1.6 1.6 0 1 1-3.2 0z"/>
+        <path fill="#2EB67D" d="M9.5 5.5a1.6 1.6 0 1 1 1.6 1.6H9.5zm0 .8a1.6 1.6 0 1 1 0 3.2h-4a1.6 1.6 0 1 1 0-3.2z"/>
+        <path fill="#ECB22E" d="M18.5 9.5a1.6 1.6 0 1 1 1.6 1.6h-1.6zm-.8 0a1.6 1.6 0 1 1-3.2 0v-4a1.6 1.6 0 1 1 3.2 0z"/>
+        <path fill="#E01E5A" d="M14.5 18.5a1.6 1.6 0 1 1-1.6-1.6h1.6zm0-.8a1.6 1.6 0 1 1 0-3.2h4a1.6 1.6 0 1 1 0 3.2z"/>
+      </symbol>
+
+      <!-- Discord: Clyde silhouette -->
+      <symbol id="lg-discord" viewBox="0 0 24 24">
+        <rect width="24" height="24" rx="6" fill="#5865F2"/>
+        <path fill="#fff" d="M18.4 6.5a14 14 0 0 0-3.5-1.1l-.2.4a13 13 0 0 0-4.5 0l-.2-.4a14 14 0 0 0-3.5 1.1A15 15 0 0 0 4 16.2a14 14 0 0 0 4.2 2.1l.4-.6c-.6-.2-1.2-.5-1.7-.8l.4-.3a10 10 0 0 0 9.4 0l.4.3c-.5.3-1.1.6-1.7.8l.4.6A14 14 0 0 0 20 16.2a15 15 0 0 0-1.6-9.7zM9.5 14c-.9 0-1.6-.8-1.6-1.8s.7-1.8 1.6-1.8 1.6.8 1.6 1.8-.7 1.8-1.6 1.8zm5 0c-.9 0-1.6-.8-1.6-1.8s.7-1.8 1.6-1.8 1.6.8 1.6 1.8-.7 1.8-1.6 1.8z"/>
+      </symbol>
+
+      <!-- Telegram -->
+      <symbol id="lg-telegram" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="12" fill="#229ED9"/>
+        <path fill="#fff" d="M5.5 11.7 17 7.3c.5-.2 1 .1.9.7l-2 9.4c-.1.5-.4.6-.8.4l-3.4-2.5-1.6 1.6c-.2.2-.4.3-.7.2l.3-3.3 6-5.5c.3-.2-.1-.4-.4-.2l-7.4 4.7-3.2-1c-.7-.2-.7-.7.3-1z"/>
+      </symbol>
+
+      <!-- WhatsApp: green bubble with white phone receiver curl -->
+      <symbol id="lg-whatsapp" viewBox="0 0 24 24">
+        <rect width="24" height="24" rx="6" fill="#25D366"/>
+        <path fill="#fff" d="M17.4 6.5A7.6 7.6 0 0 0 4.6 14.6L4 19l4.5-1.2a7.6 7.6 0 0 0 11.2-7.1 7.6 7.6 0 0 0-2.3-4.2zm-5.5 11.7a6.3 6.3 0 0 1-3.2-.9l-.2-.1-2.7.7.7-2.6-.2-.2A6.3 6.3 0 1 1 18.2 12a6.3 6.3 0 0 1-6.3 6.2zm3.5-4.7-.4-.2c-.2-.1-1.3-.6-1.5-.7-.2-.1-.3-.1-.5.1l-.6.7c-.1.1-.2.1-.4 0a5.2 5.2 0 0 1-1.5-1 5.7 5.7 0 0 1-1.1-1.3c-.1-.2 0-.3.1-.4l.3-.3c.1-.1.1-.2.2-.4.1-.1 0-.2 0-.3l-.7-1.6c-.1-.3-.3-.3-.4-.3h-.4a.7.7 0 0 0-.5.2c-.2.2-.7.7-.7 1.7s.7 2 .8 2.1c.1.1 1.4 2.2 3.4 3.1.5.2.8.3 1.1.4.5.2.9.1 1.2.1.4-.1 1.2-.5 1.4-1 .2-.4.2-.8.1-.9z"/>
+      </symbol>
+
+      <!-- Zoho Cliq: blue outlined chat bubble with downward-right tail
+           and three red dots (typing indicator), per zoho.com/cliq brand. -->
+      <symbol id="lg-cliq" viewBox="0 0 24 24">
+        <rect width="24" height="24" rx="6" fill="#fff"/>
+        <path
+          fill="none"
+          stroke="#1A88E0"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M5 6.5 Q5 4.5 7 4.5 H17 Q19 4.5 19 6.5 V14 Q19 16 17 16 H14.5 L17 20 L12 16 H7 Q5 16 5 14 Z"
+        />
+        <circle cx="9.2"  cy="10" r="1.3" fill="#EE5E54"/>
+        <circle cx="12"   cy="10" r="1.3" fill="#EE5E54"/>
+        <circle cx="14.8" cy="10" r="1.3" fill="#EE5E54"/>
+      </symbol>
+
+      <!-- MS Teams -->
+      <symbol id="lg-teams" viewBox="0 0 24 24">
+        <rect width="24" height="24" rx="6" fill="#5059C9"/>
+        <text x="12" y="16" font-family="-apple-system, Helvetica, Arial, sans-serif" font-weight="900" font-size="13" fill="#fff" text-anchor="middle">T</text>
+        <circle cx="18.5" cy="7.5" r="2.5" fill="#7B83EB"/>
+      </symbol>
+
+      <!-- Line: green bubble with horizontal stroke marks (sound waves) -->
+      <symbol id="lg-line" viewBox="0 0 24 24">
+        <rect width="24" height="24" rx="6" fill="#06C755"/>
+        <path fill="#fff" d="M12 4.6c-4.4 0-8 2.9-8 6.5 0 3.2 2.8 5.9 6.7 6.4-.2.1-.6 1.6-.7 1.9-.1.4.1.4.3.3.2-.1 3-2 4.2-2.7 3.1-.2 5.5-2.6 5.5-5.9 0-3.6-3.6-6.5-8-6.5z"/>
+        <text x="12" y="14" font-family="-apple-system, Arial Black, sans-serif" font-weight="900" font-size="5.5" fill="#06C755" text-anchor="middle" letter-spacing="0.2">LINE</text>
+      </symbol>
+
+      <!-- Google Chat: rounded chat bubble in Google green with multi-color dots -->
+      <symbol id="lg-gchat" viewBox="0 0 24 24">
+        <rect width="24" height="24" rx="6" fill="#fff"/>
+        <path fill="#00ac47" d="M5 6.5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2h-5l-3.6 3v-3H7a2 2 0 0 1-2-2z"/>
+        <circle cx="9.2"  cy="10.6" r="1.1" fill="#4285F4"/>
+        <circle cx="12"   cy="10.6" r="1.1" fill="#FBBC04"/>
+        <circle cx="14.8" cy="10.6" r="1.1" fill="#EA4335"/>
+      </symbol>
+
+      <!-- Meta Messenger: blue gradient bubble with white lightning bolt -->
+      <symbol id="lg-meta" viewBox="0 0 24 24">
+        <defs>
+          <linearGradient id="metaGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%"  stop-color="#0099ff"/>
+            <stop offset="100%" stop-color="#a033ff"/>
+          </linearGradient>
+        </defs>
+        <rect width="24" height="24" rx="6" fill="url(#metaGrad)"/>
+        <path fill="#fff" d="M12 4a8 8 0 0 0-8 8.2c0 2.4 1 4.5 2.7 6V21l2.5-1.4a8 8 0 1 0 2.8-15.6zm.7 10.7-2-2.2-3.9 2.2 4.3-4.6 2.1 2.1 3.8-2.1z"/>
+      </symbol>
+
+      <!-- generic feature icons -->
+    </defs>
+  </svg>
+
+  <header class="topnav">
+    <div class="container nav">
+      <a class="brand" href="#"><span class="brand-mark">m</span> mio</a>
+      <nav class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#usecases">Use cases</a>
+        <a href="#docs">Docs</a>
+      </nav>
+      <div style="display: flex; gap: 8px;">
+        <a class="btn btn-ghost" href="#docs">GitHub</a>
+        <a class="btn btn-primary" href="#cta">Get started</a>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ─── Hero ─── -->
+    <section class="hero">
+      <div class="container hero-inner">
+        <span class="eyebrow">
+          <span class="dot"></span>
+          v0.4.0 · NATS JetStream-native · Apache-2.0
+        </span>
+        <h1>The <span class="accent">durable messaging fabric</span><br/>your AI agents are missing.</h1>
+        <p class="lead">
+          mio is the messaging substrate purpose-built for AI agents. Bring any channel — Slack, Discord, Telegram, WhatsApp, Messenger, Google&nbsp;Chat, Teams, Zoho&nbsp;Cliq, Line — and stop rebuilding webhook plumbing, retries, dedup, and replay for every project.
+        </p>
+        <div class="hero-ctas">
+          <a class="btn btn-primary" href="#cta">Run mio in 60 seconds</a>
+          <a class="btn btn-secondary" href="#architecture">See the architecture</a>
+        </div>
+        <div class="hero-meta">
+          <span>Exactly-once delivery</span>
+          <span>Crash-safe agent state</span>
+          <span>Replay any conversation</span>
+        </div>
+
+        <!-- Animated bus visualization -->
+        <div class="bus-vis" aria-hidden="true">
+          <svg viewBox="0 0 920 280" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="busGradient" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%"  stop-color="#5865f2"/>
+                <stop offset="50%" stop-color="#00a8fc"/>
+                <stop offset="100%" stop-color="#23a55a"/>
+              </linearGradient>
+              <path id="flowPath1" d="M 80 60 Q 230 60 460 140" />
+              <path id="flowPath2" d="M 240 30 Q 350 80 460 140" />
+              <path id="flowPath3" d="M 460 140 Q 600 200 840 230" />
+              <path id="flowPath4" d="M 460 140 Q 620 90 840 60" />
+            </defs>
+
+            <!-- guide lines -->
+            <path class="bus-track" d="M 80 60 Q 230 60 460 140"/>
+            <path class="bus-track" d="M 240 30 Q 350 80 460 140"/>
+            <path class="bus-track" d="M 80 220 Q 240 220 460 140"/>
+            <path class="bus-track" d="M 240 250 Q 350 200 460 140"/>
+            <path class="bus-track" d="M 460 140 Q 600 200 840 230"/>
+            <path class="bus-track" d="M 460 140 Q 620 90 840 60"/>
+            <path class="bus-track" d="M 460 140 Q 600 60 840 30"/>
+            <path class="bus-track" d="M 460 140 Q 620 220 840 250"/>
+
+            <!-- flowing particles -->
+            <circle r="4" class="bus-particle" style="offset-path: path('M 80 60 Q 230 60 460 140'); animation: flow 2.4s linear infinite;"/>
+            <circle r="3" class="bus-particle" style="offset-path: path('M 240 30 Q 350 80 460 140'); animation: flow 2.8s linear infinite -0.6s;"/>
+            <circle r="4" class="bus-particle" style="offset-path: path('M 80 220 Q 240 220 460 140'); animation: flow 3.0s linear infinite -1.0s;"/>
+            <circle r="3" class="bus-particle" style="offset-path: path('M 240 250 Q 350 200 460 140'); animation: flow 2.6s linear infinite -0.4s;"/>
+
+            <circle r="3" class="bus-particle" style="offset-path: path('M 460 140 Q 600 200 840 230'); animation: flow 2.4s linear infinite -1.2s; fill:#23a55a;"/>
+            <circle r="4" class="bus-particle" style="offset-path: path('M 460 140 Q 620 90 840 60'); animation: flow 2.8s linear infinite -0.8s; fill:#23a55a;"/>
+            <circle r="3" class="bus-particle" style="offset-path: path('M 460 140 Q 600 60 840 30'); animation: flow 3.0s linear infinite -1.6s; fill:#23a55a;"/>
+            <circle r="3" class="bus-particle" style="offset-path: path('M 460 140 Q 620 220 840 250'); animation: flow 2.6s linear infinite -2.0s; fill:#23a55a;"/>
+
+            <!-- node labels — only for visible source/sink nodes -->
+            <text x="80"  y="98"  text-anchor="middle" class="bus-node-label">slack</text>
+            <text x="240" y="68"  text-anchor="middle" class="bus-node-label">discord</text>
+            <text x="80"  y="258" text-anchor="middle" class="bus-node-label">messenger</text>
+            <text x="240" y="288" text-anchor="middle" class="bus-node-label">cliq</text>
+            <text x="840" y="98"  text-anchor="middle" class="bus-node-label">support agent</text>
+            <text x="840" y="268" text-anchor="middle" class="bus-node-label">ops bot</text>
+          </svg>
+
+          <!-- source nodes (left) -->
+          <div class="bus-source" style="left: 80px; top: 60px;"><svg><use href="#lg-slack"/></svg></div>
+          <div class="bus-source" style="left: 240px; top: 30px;"><svg><use href="#lg-discord"/></svg></div>
+          <div class="bus-source" style="left: 80px;  top: 220px;"><svg><use href="#lg-meta"/></svg></div>
+          <div class="bus-source" style="left: 240px; top: 250px;"><svg><use href="#lg-cliq"/></svg></div>
+
+          <!-- core (center) -->
+          <div class="bus-core">mio core<br/><span class="meta">NATS JetStream · mio.events.&gt;</span></div>
+
+          <!-- sink nodes (right) — agents -->
+          <div class="bus-sink" style="left: 840px; top: 60px;  background: rgba(35,165,90,0.14); border-color: var(--status-online);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#23a55a" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="9" r="3"/><path d="M5 20a7 7 0 0 1 14 0M9 4h6"/></svg>
+          </div>
+          <div class="bus-sink" style="left: 840px; top: 230px; background: rgba(35,165,90,0.14); border-color: var(--status-online);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#23a55a" stroke-width="1.8" stroke-linecap="round"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="6"/></svg>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Channels strip ─── -->
+    <section class="channels">
+      <div class="container">
+        <p class="channels-caption">Nine channels today · adapter SDK to add your own</p>
+        <div class="channels-row">
+          <span class="ch-chip"><span class="ch-logo"><svg><use href="#lg-slack"/></svg></span>Slack</span>
+          <span class="ch-chip"><span class="ch-logo"><svg><use href="#lg-discord"/></svg></span>Discord</span>
+          <span class="ch-chip"><span class="ch-logo"><svg><use href="#lg-telegram"/></svg></span>Telegram</span>
+          <span class="ch-chip"><span class="ch-logo"><svg><use href="#lg-whatsapp"/></svg></span>WhatsApp</span>
+          <span class="ch-chip"><span class="ch-logo"><svg><use href="#lg-meta"/></svg></span>Messenger</span>
+          <span class="ch-chip"><span class="ch-logo"><svg><use href="#lg-gchat"/></svg></span>Google Chat</span>
+          <span class="ch-chip"><span class="ch-logo"><svg><use href="#lg-teams"/></svg></span>MS Teams</span>
+          <span class="ch-chip"><span class="ch-logo"><svg><use href="#lg-cliq"/></svg></span>Zoho Cliq</span>
+          <span class="ch-chip"><span class="ch-logo"><svg><use href="#lg-line"/></svg></span>Line</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Why this exists (problem cards) ─── -->
+    <section>
+      <div class="container">
+        <div class="section-head reveal">
+          <p class="kicker">Why this exists</p>
+          <h2>AI agents need infrastructure, not glue code.</h2>
+          <p>Every team building agents rewrites the same plumbing. mio is the layer you keep when the model changes.</p>
+        </div>
+        <div class="problem-grid">
+          <div class="problem reveal">
+            <span class="num">PROBLEM 01</span>
+            <h3>Webhooks are 10 different APIs</h3>
+            <p>Slack signs differently from Messenger. WhatsApp retries differently from Cliq. Google Chat throttles differently from Teams. Every platform's quirks leak into your agent code — until it's mostly glue.</p>
+          </div>
+          <div class="problem reveal">
+            <span class="num">PROBLEM 02</span>
+            <h3>Agents crash mid-thought</h3>
+            <p>Your worker OOMs while the LLM is streaming. The user sees half a reply, your tool-call result is gone, the conversation is corrupted. There's no replay.</p>
+          </div>
+          <div class="problem reveal">
+            <span class="num">PROBLEM 03</span>
+            <h3>"Send once" is fiction</h3>
+            <p>You retry on a 502. The platform queues both. The user gets two replies. Or worse: two charges, two tickets, two pings to oncall.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Features ─── -->
+    <section id="features">
+      <div class="container">
+        <div class="section-head reveal">
+          <p class="kicker">Capabilities</p>
+          <h2>Everything an agent operator needs. Nothing more.</h2>
+          <p>Twelve things mio does so your agent doesn't have to. All built on NATS JetStream — battle-tested at trillions of messages.</p>
+        </div>
+
+        <div class="features-grid">
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="m4 12 4 4 12-12"/><circle cx="12" cy="20" r="2"/></svg></span>
+            <h3>Exactly-once delivery</h3>
+            <p>Per-message dedup keys + JetStream ack window. Your agent sees each inbound event one time, even across reconnects.</p>
+          </div>
+
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="14" rx="2"/><path d="M7 6V3h10v3M3 12h18"/></svg></span>
+            <h3>Crash-safe state</h3>
+            <p>Conversation context lives in NATS KV with per-thread atomic updates. Restart the agent process; pick up the exact turn it died on.</p>
+          </div>
+
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/><path d="M3 12a9 9 0 0 1 16-6"/></svg></span>
+            <h3>Time-travel replay</h3>
+            <p>Replay the last N days of any user/thread into a new agent. A/B a new prompt against real traffic with zero customer impact.</p>
+          </div>
+
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4"/></svg></span>
+            <h3>Streaming responses</h3>
+            <p>Token-by-token to channels that support edits (Slack, Telegram, Discord); typing indicators on the rest. One agent code path.</p>
+          </div>
+
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><rect x="8" y="8" width="8" height="8" rx="2"/></svg></span>
+            <h3>Normalized envelope</h3>
+            <p>One typed message schema across every channel. `from`, `thread`, `text`, `attachments`, `reply_to` — same shape, every adapter.</p>
+          </div>
+
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="M3 17h2l2-7 4 14 2-7h8"/></svg></span>
+            <h3>Backpressure-aware</h3>
+            <p>LLM rate-limited? Channel throttling? mio holds the queue, retries with jittered backoff, and never silently drops.</p>
+          </div>
+
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9"/><path d="m21 3-9 9-4-4"/></svg></span>
+            <h3>Outbound idempotency</h3>
+            <p>Send the same intent twice; mio sends once. Idempotency keys are first-class, not retrofitted with hashes of message bodies.</p>
+          </div>
+
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="M9 11V7a3 3 0 0 1 6 0v4"/><rect x="5" y="11" width="14" height="10" rx="2"/></svg></span>
+            <h3>Tenant isolation</h3>
+            <p>Per-customer NATS accounts and subject ACLs. Run hundreds of agents on one cluster without leaking data between tenants.</p>
+          </div>
+
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 1v6M12 17v6M4.2 4.2l4.3 4.3M15.5 15.5l4.3 4.3M1 12h6M17 12h6M4.2 19.8l4.3-4.3M15.5 8.5l4.3-4.3"/></svg></span>
+            <h3>Tool-call hand-off</h3>
+            <p>Agent kicks off a 60s browser/code/DB tool. mio holds the typing indicator, suspends the turn durably, resumes when done.</p>
+          </div>
+
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 6-6"/></svg></span>
+            <h3>Cost & latency observability</h3>
+            <p>Built-in OpenTelemetry spans from inbound message → agent → LLM → tools → outbound. Per-tenant token & dollar caps.</p>
+          </div>
+
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20"/></svg></span>
+            <h3>Adapter SDK</h3>
+            <p>~200 lines of Go to add a new channel. Today: 10 adapters. Tomorrow: your internal CRM, voice, IVR, anything with a webhook.</p>
+          </div>
+
+          <div class="feat reveal">
+            <span class="icon"><svg viewBox="0 0 24 24"><path d="M2 12h6l2-3 4 6 2-3h6"/></svg></span>
+            <h3>Pre-send DLP hooks</h3>
+            <p>Run a redactor between the agent and the wire. PII stays in your VPC; what leaves is exactly what you allow to leave.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Architecture ─── -->
+    <section id="architecture" class="arch">
+      <div class="container">
+        <div class="section-head reveal">
+          <p class="kicker">How it fits together</p>
+          <h2>One bus. Many channels. Your agents on top.</h2>
+          <p>mio sits between every messaging platform and your agent runtime. Inbound events become NATS subjects; outbound replies are durable, idempotent, and traced end-to-end.</p>
+        </div>
+
+        <div class="arch-board reveal">
+          <div class="arch-row sources">
+            <div class="arch-node"><span class="ch-logo"><svg><use href="#lg-slack"/></svg></span><span class="name">Slack</span></div>
+            <div class="arch-node"><span class="ch-logo"><svg><use href="#lg-discord"/></svg></span><span class="name">Discord</span></div>
+            <div class="arch-node"><span class="ch-logo"><svg><use href="#lg-telegram"/></svg></span><span class="name">Telegram</span></div>
+            <div class="arch-node"><span class="ch-logo"><svg><use href="#lg-whatsapp"/></svg></span><span class="name">WhatsApp</span></div>
+            <div class="arch-node"><span class="ch-logo"><svg><use href="#lg-meta"/></svg></span><span class="name">Messenger</span></div>
+          </div>
+          <div class="arch-row sources second">
+            <div class="arch-node"><span class="ch-logo"><svg><use href="#lg-gchat"/></svg></span><span class="name">Google Chat</span></div>
+            <div class="arch-node"><span class="ch-logo"><svg><use href="#lg-teams"/></svg></span><span class="name">Teams</span></div>
+            <div class="arch-node"><span class="ch-logo"><svg><use href="#lg-cliq"/></svg></span><span class="name">Zoho Cliq</span></div>
+            <div class="arch-node"><span class="ch-logo"><svg><use href="#lg-line"/></svg></span><span class="name">Line</span></div>
+          </div>
+
+          <div class="arch-arrow">↓ &nbsp; mio adapters · normalized envelope · signed &nbsp; ↓</div>
+
+          <div class="arch-bus">
+            <div class="label">NATS JetStream · mio.events.&gt; · mio.outbound.&gt;</div>
+            <div class="name">mio core</div>
+            <div class="meta">durable · replayable · exactly-once · multi-tenant</div>
+          </div>
+
+          <div class="arch-arrow">↓ &nbsp; subscribe by tenant / channel / thread &nbsp; ↓</div>
+
+          <div class="arch-row sinks">
+            <div class="arch-node">
+              <span class="icon-mini"><svg viewBox="0 0 24 24"><path d="M9 11V7a3 3 0 0 1 6 0v4"/><rect x="5" y="11" width="14" height="10" rx="2" fill="none"/></svg></span>
+              Support agent
+            </div>
+            <div class="arch-node">
+              <span class="icon-mini"><svg viewBox="0 0 24 24"><path d="m3 17 6-6 4 4 8-8"/><path d="M14 7h6v6"/></svg></span>
+              Sales SDR
+            </div>
+            <div class="arch-node">
+              <span class="icon-mini"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></svg></span>
+              Oncall router
+            </div>
+            <div class="arch-node">
+              <span class="icon-mini"><svg viewBox="0 0 24 24"><path d="M4 4h16v6H4zM4 14h16v6H4z"/></svg></span>
+              Summarizer
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Code example with typewriter ─── -->
+    <section>
+      <div class="container">
+        <div class="section-head reveal">
+          <p class="kicker">Developer experience</p>
+          <h2>Five lines from inbound to reply.</h2>
+          <p>The SDK is the boring part. mio handles the hard parts under it.</p>
+        </div>
+
+        <div class="code-wrap reveal">
+          <div class="term-bar">
+            <span class="tlight r"></span><span class="tlight y"></span><span class="tlight g"></span>
+            <span class="ttitle">~/agents/support_bot.py</span>
+            <div class="term-tabs">
+              <span class="term-tab active" data-lang="py">python</span>
+              <span class="term-tab" data-lang="ts">typescript</span>
+              <span class="term-tab" data-lang="go">go</span>
+            </div>
+          </div>
+          <div class="term-body" id="codeBody"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Use cases ─── -->
+    <section id="usecases">
+      <div class="container">
+        <div class="section-head reveal">
+          <p class="kicker">Use cases</p>
+          <h2>Built for the messy reality of multi-channel agents.</h2>
+        </div>
+
+        <div class="usecase-grid">
+
+          <!-- 1 · Customer support — multi-region clocks -->
+          <div class="usecase reveal" data-theme="support">
+            <div class="usecase-content">
+              <span class="role">Customer support</span>
+              <h3>One agent, every region's app, every region's hour</h3>
+              <p>Saigon pings on Messenger at 14:30 ICT. Bengaluru on Cliq at 13:00 IST. Berlin on Teams at 09:30 CET. Your agent answers all three with one prompt and one knowledge base — mio normalizes the envelope and routes each reply back to the channel and locale it came from.</p>
+              <div class="channels-mini">
+                <span class="ch-logo"><svg><use href="#lg-meta"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-cliq"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-teams"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-whatsapp"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-gchat"/></svg></span>
+              </div>
+            </div>
+            <div class="usecase-visual" aria-hidden="true">
+              <div class="v-grid"></div>
+              <div class="uv-orbit-line"></div>
+              <div class="uv-orbit-dot"></div>
+              <div class="uv-clocks">
+                <div class="uv-clock">
+                  <div class="uv-bubble"><svg><use href="#lg-meta"/></svg></div>
+                  <div class="face" style="--h: 218deg; --m: 180deg;"><span class="pivot"></span></div>
+                  <span class="city">Saigon</span>
+                  <span class="time">14:30 ICT</span>
+                </div>
+                <div class="uv-clock">
+                  <div class="uv-bubble"><svg><use href="#lg-cliq"/></svg></div>
+                  <div class="face" style="--h: 195deg; --m: 0deg;"><span class="pivot"></span></div>
+                  <span class="city">Bengaluru</span>
+                  <span class="time">13:00 IST</span>
+                </div>
+                <div class="uv-clock">
+                  <div class="uv-bubble"><svg><use href="#lg-teams"/></svg></div>
+                  <div class="face" style="--h: 285deg; --m: 180deg;"><span class="pivot"></span></div>
+                  <span class="city">Berlin</span>
+                  <span class="time">09:30 CET</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2 · Sales SDR — crash & resume heartbeat -->
+          <div class="usecase reveal" data-theme="sales">
+            <div class="usecase-content">
+              <span class="role">Sales SDR</span>
+              <h3>The bot that survives the demo crash</h3>
+              <p>Mid-conversation, your container OOMs. The prospect is half-way through a question on WhatsApp. mio's durable thread state lets the next replica resume the exact turn — same context window, same pending tool call, same typing indicator. No "sorry, can you repeat that?"</p>
+              <div class="channels-mini">
+                <span class="ch-logo"><svg><use href="#lg-whatsapp"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-meta"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-line"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-telegram"/></svg></span>
+              </div>
+            </div>
+            <div class="usecase-visual" aria-hidden="true">
+              <div class="v-grid"></div>
+              <div class="uv-pulse">
+              <svg viewBox="0 0 360 200" preserveAspectRatio="none">
+                <!-- horizontal grid lines -->
+                <line class="grid-line" x1="0" y1="50"  x2="360" y2="50"/>
+                <line class="grid-line" x1="0" y1="100" x2="360" y2="100"/>
+                <line class="grid-line" x1="0" y1="150" x2="360" y2="150"/>
+
+                <!-- baseline → spike → flatline gap → recover spike → baseline -->
+                <path class="baseline" d="
+                  M 10 100
+                  L 60 100
+                  L 75 70 L 90 130 L 105 100
+                  L 140 100
+                  L 155 70 L 170 130 L 185 100
+                  L 195 100  L 210 100
+                  L 230 100  L 250 100
+                  L 265 70 L 280 130 L 295 100
+                  L 350 100
+                "/>
+
+                <!-- crash marker -->
+                <circle class="crash-marker" cx="200"  cy="100" r="4"/>
+                <text class="label crash-label" x="180" y="80">agent.crashed</text>
+
+                <!-- resume marker -->
+                <circle class="resume-marker" cx="240" cy="100" r="4"/>
+                <text class="label resume-label" x="220" y="130">thread.resumed · 312ms</text>
+
+                <!-- timestamps -->
+                <text class="ts" x="6"   y="195">t-2s</text>
+                <text class="ts" x="170" y="195">crash</text>
+                <text class="ts" x="324" y="195">t+0s</text>
+              </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3 · Internal ops — live deploy terminal -->
+          <div class="usecase reveal" data-theme="ops">
+            <div class="usecase-content">
+              <span class="role">Internal ops</span>
+              <h3>The bot that does deploys, even when it dies mid-deploy</h3>
+              <p>An on-call engineer types <code style="font-family:var(--font-mono); font-size:13px; color:var(--header-primary); background:var(--bg-floating); padding:1px 6px; border-radius:4px;">/deploy api v3.4</code> in Slack. The agent runs a 90-second Terraform plan. mio holds the channel open, streams the diff in real time, and — critically — survives autoscaling killing the worker mid-run.</p>
+              <div class="channels-mini">
+                <span class="ch-logo"><svg><use href="#lg-slack"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-discord"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-teams"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-cliq"/></svg></span>
+              </div>
+            </div>
+            <div class="usecase-visual" aria-hidden="true">
+              <div class="uv-term">
+                <div class="uv-term-bar">
+                  <span class="l r"></span><span class="l y"></span><span class="l g"></span>
+                  <span class="t">slack #ops · agent</span>
+                </div>
+                <div class="uv-term-body">
+                  <div class="uv-line"><span class="prompt">@deploybot</span> <span class="uv-typed">/deploy api v3.4</span></div>
+                  <div class="uv-line uv-line-2"><span class="muted">› planning…</span> <span class="uv-spinner"></span></div>
+                  <div class="uv-line uv-line-3"><span class="warn">⚠</span> <span class="muted">worker restarted · resuming from t+47s</span></div>
+                  <div class="uv-line uv-line-4"><span class="ok">✓</span> deployed <span class="ok">api v3.4</span> <span class="muted">in 87s</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4 · Voice of customer — replay scrubber -->
+          <div class="usecase reveal" data-theme="voc">
+            <div class="usecase-content">
+              <span class="role">Voice of customer</span>
+              <h3>Replay last week against tomorrow's prompt</h3>
+              <p>Shipped a new system prompt? Replay 14k real conversations from Telegram, Cliq, Messenger, and Google Chat against it — offline, in parallel — and diff the responses before you flip the toggle. mio's event log is the only ground truth you need.</p>
+              <div class="channels-mini">
+                <span class="ch-logo"><svg><use href="#lg-telegram"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-cliq"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-meta"/></svg></span>
+                <span class="ch-logo"><svg><use href="#lg-gchat"/></svg></span>
+              </div>
+            </div>
+            <div class="usecase-visual" aria-hidden="true">
+              <div class="v-grid"></div>
+              <div class="uv-replay">
+                <div class="uv-replay-head">
+                  <span>REPLAY · v0.4 vs v0.5</span>
+                  <span class="live">● LIVE</span>
+                </div>
+                <div class="uv-replay-rows">
+                  <div class="uv-row" style="--w-old:64%; --w-new:48%;">
+                    <span class="label"><svg><use href="#lg-telegram"/></svg>tel</span>
+                    <span class="bar"></span>
+                  </div>
+                  <div class="uv-row" style="--w-old:42%; --w-new:58%;">
+                    <span class="label"><svg><use href="#lg-cliq"/></svg>cliq</span>
+                    <span class="bar"></span>
+                  </div>
+                  <div class="uv-row" style="--w-old:52%; --w-new:36%;">
+                    <span class="label"><svg><use href="#lg-meta"/></svg>msgr</span>
+                    <span class="bar"></span>
+                  </div>
+                  <div class="uv-row" style="--w-old:38%; --w-new:64%;">
+                    <span class="label"><svg><use href="#lg-gchat"/></svg>gchat</span>
+                    <span class="bar"></span>
+                  </div>
+                  <div class="uv-scrubber"></div>
+                </div>
+                <div class="uv-replay-foot">
+                  <span class="swatch" style="background:linear-gradient(90deg,var(--blurple),var(--blurple-soft));"></span>v0.4
+                  <span class="swatch" style="background:linear-gradient(90deg,var(--status-warn),#ff9c40);"></span>v0.5
+                  <span style="margin-left:auto;">14,082 threads</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Stats ─── -->
+    <section class="stats">
+      <div class="container">
+        <div class="section-head reveal">
+          <p class="kicker">In production</p>
+          <h2>Numbers from the early adopters.</h2>
+        </div>
+        <div class="stats-grid">
+          <div class="stat reveal">
+            <div class="num"><span data-count="38">0</span><span class="u">ms</span></div>
+            <div class="label">p95 inbound → agent</div>
+          </div>
+          <div class="stat reveal">
+            <div class="num"><span data-count="10">0</span></div>
+            <div class="label">channel adapters</div>
+          </div>
+          <div class="stat reveal">
+            <div class="num"><span data-count="2">0</span><span class="u">.1M</span></div>
+            <div class="label">msgs / day in prod</div>
+          </div>
+          <div class="stat reveal">
+            <div class="num"><span data-count="0">0</span><span class="u">%</span></div>
+            <div class="label">message loss to date</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ─── Footer CTA band ─── -->
+  <section id="cta" class="cta-band">
+    <div class="container">
+      <h2>Stop rebuilding the plumbing. Ship the agent.</h2>
+      <p>Run mio in your cluster in under a minute. Bring your own NATS — or use ours.</p>
+      <div style="display: inline-flex; gap: 10px; flex-wrap: wrap; justify-content: center; position: relative;">
+        <a class="btn btn-primary" href="#">Get started — free forever</a>
+        <a class="btn btn-ghost" href="#">Read the docs</a>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site">
+    <div class="container footer-row">
+      <span class="copy">© 2026 mio · Apache-2.0 core · made for agent builders</span>
+      <nav class="footer-links">
+        <a href="#">Docs</a>
+        <a href="#">GitHub</a>
+        <a href="#">Discord</a>
+        <a href="#">Changelog</a>
+        <a href="#">Privacy</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    // ─── Reveal-on-scroll ────────────────────────────────────────────
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) {
+          e.target.classList.add('in');
+          io.unobserve(e.target);
+        }
+      }
+    }, { threshold: 0.12, rootMargin: '0px 0px -40px 0px' });
+    document.querySelectorAll('.reveal').forEach((el) => io.observe(el));
+
+    // ─── Count-up stats ──────────────────────────────────────────────
+    const countIo = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const el = e.target;
+        const target = parseFloat(el.dataset.count);
+        const dur = 1400;
+        const start = performance.now();
+        function step(now) {
+          const t = Math.min(1, (now - start) / dur);
+          const eased = 1 - Math.pow(1 - t, 3);
+          el.textContent = (target * eased).toFixed(target % 1 === 0 ? 0 : 1);
+          if (t < 1) requestAnimationFrame(step);
+          else el.textContent = target;
+        }
+        requestAnimationFrame(step);
+        countIo.unobserve(el);
+      }
+    }, { threshold: 0.6 });
+    document.querySelectorAll('[data-count]').forEach((el) => countIo.observe(el));
+
+    // ─── Code typewriter (multi-language tabs) ───────────────────────
+    const samples = {
+      py: `<span class="c"># pip install mio-agent</span>
+<span class="k">from</span> mio <span class="k">import</span> Agent
+
+agent = <span class="fn">Agent</span>(name=<span class="str">"support-bot"</span>, channels=<span class="lit">"*"</span>)
+
+<span class="lit">@agent.on_message</span>
+<span class="k">async def</span> <span class="fn">reply</span>(msg, ctx):
+    <span class="c"># ctx.thread is durable — survives restarts</span>
+    answer = <span class="k">await</span> ctx.llm.<span class="fn">stream</span>(
+        system=<span class="str">"You are mio support."</span>,
+        history=ctx.thread.history,
+        user=msg.text,
+    )
+    <span class="k">await</span> msg.<span class="fn">reply</span>(answer)   <span class="c"># exactly-once outbound</span>
+
+agent.<span class="fn">run</span>()`,
+      ts: `<span class="c">// npm i @mio/agent</span>
+<span class="k">import</span> { Agent } <span class="k">from</span> <span class="str">"@mio/agent"</span>;
+
+<span class="k">const</span> agent = <span class="k">new</span> <span class="fn">Agent</span>({ name: <span class="str">"support-bot"</span>, channels: <span class="str">"*"</span> });
+
+agent.<span class="fn">onMessage</span>(<span class="k">async</span> (msg, ctx) => {
+  <span class="c">// ctx.thread is durable — survives restarts</span>
+  <span class="k">const</span> answer = <span class="k">await</span> ctx.llm.<span class="fn">stream</span>({
+    system: <span class="str">"You are mio support."</span>,
+    history: ctx.thread.history,
+    user: msg.text,
+  });
+  <span class="k">await</span> msg.<span class="fn">reply</span>(answer);  <span class="c">// exactly-once outbound</span>
+});
+
+agent.<span class="fn">run</span>();`,
+      go: `<span class="c">// go get github.com/mio-io/agent-go</span>
+<span class="k">package</span> main
+
+<span class="k">import</span> <span class="str">"github.com/mio-io/agent-go"</span>
+
+<span class="k">func</span> <span class="fn">main</span>() {
+    a := agent.<span class="fn">New</span>(agent.Config{Name: <span class="str">"support-bot"</span>, Channels: <span class="str">"*"</span>})
+
+    a.<span class="fn">OnMessage</span>(<span class="k">func</span>(msg *agent.Msg, ctx *agent.Ctx) <span class="lit">error</span> {
+        <span class="c">// ctx.Thread is durable — survives restarts</span>
+        ans, err := ctx.LLM.<span class="fn">Stream</span>(ctx, agent.Prompt{
+            System:  <span class="str">"You are mio support."</span>,
+            History: ctx.Thread.History,
+            User:    msg.Text,
+        })
+        <span class="k">if</span> err != <span class="lit">nil</span> { <span class="k">return</span> err }
+        <span class="k">return</span> msg.<span class="fn">Reply</span>(ans)  <span class="c">// exactly-once outbound</span>
+    })
+
+    a.<span class="fn">Run</span>()
+}`
+    };
+    const codeBody = document.getElementById('codeBody');
+    const tabs = document.querySelectorAll('.term-tab');
+    let currentTimer;
+    function typewrite(html) {
+      if (currentTimer) cancelAnimationFrame(currentTimer);
+      // Tokenize: each <tag> is atomic, characters one at a time.
+      // Assigning innerHTML += per-token would corrupt partially-typed tags,
+      // so we buffer the cumulative HTML and assign innerHTML once per frame.
+      const tokens = [];
+      const re = /(<[^>]+>|[\s\S])/g;
+      let m;
+      while ((m = re.exec(html)) !== null) tokens.push(m[0]);
+      let i = 0;
+      let buffer = '';
+      const speed = 5;  // tokens per frame
+      codeBody.innerHTML = '';
+      function frame() {
+        for (let k = 0; k < speed && i < tokens.length; k++, i++) {
+          buffer += tokens[i];
+        }
+        if (i < tokens.length) {
+          codeBody.innerHTML = buffer + '<span class="caret"></span>';
+          currentTimer = requestAnimationFrame(frame);
+        } else {
+          codeBody.innerHTML = buffer + '<span class="caret"></span>';
+        }
+      }
+      currentTimer = requestAnimationFrame(frame);
+    }
+    function show(lang) {
+      tabs.forEach(t => t.classList.toggle('active', t.dataset.lang === lang));
+      typewrite(samples[lang]);
+    }
+    tabs.forEach(t => t.addEventListener('click', () => show(t.dataset.lang)));
+    // start typing once the code section is in view
+    const codeIo = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (e.isIntersecting) { show('py'); codeIo.disconnect(); }
+      }
+    }, { threshold: 0.3 });
+    codeIo.observe(codeBody);
+  </script>
+</body>
+</html>

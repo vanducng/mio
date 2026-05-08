@@ -32,7 +32,6 @@ node_modules/
 proto/gen/
 
 # local-only working areas (design docs, scratch, channel POCs)
-plans/
 playground/
 
 # local data
@@ -43,3 +42,6 @@ appdata/
 .vscode/
 .DS_Store
 *.swp
+
+.temp
+docs/journals
