@@ -49,16 +49,33 @@ the receiver.
 ## Quickstart
 
 ```bash
-# Coming in P0:
-make up                 # NATS + Postgres + MinIO
-make proto              # buf generate
+git clone https://github.com/vanducng/mio.git
+cd mio
+mise install            # pins Go 1.23, Python 3.12, buf, protoc
+make up                 # NATS + Postgres + MinIO (all three healthy)
+make proto              # buf generate → proto/gen/
 ```
+
+### Port collisions
+
+Default ports: Postgres **5432**, NATS **4222** + **8222**, MinIO **9000** + **9001**.
+
+If any collide with existing local services:
+
+```bash
+cp .env.example .env.local
+# edit .env.local, then:
+export $(grep -v '^#' .env.local | xargs)
+make up
+```
+
+See `.env.example` for the full list of overridable variables.
 
 ## Design rules — non-negotiable
 
 1. **Gateway is dumb.** Validate signature, normalize, publish, ack. No business logic.
 2. **Consumers talk to NATS directly via the SDK.** No proxy service.
-3. **Idempotency at the edge.** `(channel, source_message_id)` unique constraint.
+3. **Idempotency at the edge.** `(account_id, source_message_id)` unique constraint.
 4. **Per-workspace rate limits, not global.** One chatty tenant must not starve others.
 5. **Per-thread ordering** via single-replica AI consumer with `MaxAckPending=1`.
 6. **Two-step UX for slow LLM calls.** Send "thinking…" immediately, edit-in-place when answered.

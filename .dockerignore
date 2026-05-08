@@ -1,0 +1,35 @@
+# Version control
+.git
+
+# Local data volumes (never in build context)
+appdata/
+
+# Generated proto output (rebuilt during image build if needed)
+proto/gen/
+
+# Local-only areas
+playground/
+plans/
+docs/
+
+# Environment / secrets
+.env*
+!.env.example
+
+# Python artifacts
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Node
+node_modules/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+.temp

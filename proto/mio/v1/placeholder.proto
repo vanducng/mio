@@ -1,0 +1,6 @@
+// Package mio.v1 — placeholder. Envelope schema lands in P1.
+syntax = "proto3";
+
+package mio.v1;
+
+option go_package = "github.com/vanducng/mio/proto/gen/go/mio/v1;miov1";

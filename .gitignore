@@ -37,6 +37,13 @@ playground/
 # local data
 appdata/
 
+# Go workspace (local-only; CI uses single root go.mod)
+go.work
+go.work.sum
+
+# local env overrides
+.env.local
+
 # IDE / OS
 .idea/
 .vscode/
