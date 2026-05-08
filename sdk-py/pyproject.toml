@@ -1,0 +1,23 @@
+[project]
+name = "mio-sdk-py"
+version = "0.1.0"
+description = "MIO Python SDK — proto-generated types + publish helpers"
+requires-python = ">=3.12"
+dependencies = [
+    # Pin protobuf to 7.x: the buf.build/protocolbuffers/python plugin (latest)
+    # generates code for protobuf 7.34.1+. The 4.x series ended at 4.25.x;
+    # protobuf skipped 4.27 and 6.x, going directly to 7.x.
+    # Pin to the same major as the generated stubs to avoid runtime/gencode skew.
+    "protobuf>=7.34.0,<8.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mio*"]
+
+[dependency-groups]
+dev = []

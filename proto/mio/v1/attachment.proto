@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package mio.v1;
+
+option go_package = "github.com/vanducng/mio/proto/gen/go/mio/v1;miov1";
+
+// Attachment represents a file, image, link, or media item attached to a message.
+message Attachment {
+  // Kind classifies the attachment for rendering and routing decisions.
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_IMAGE = 1;
+    KIND_FILE = 2;
+    KIND_AUDIO = 3;
+    KIND_VIDEO = 4;
+    KIND_LINK = 5;
+  }
+
+  Kind   kind     = 1;
+  string url      = 2;
+  string mime     = 3;
+  int64  bytes    = 4;
+  string filename = 5;
+}

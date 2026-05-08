@@ -1,14 +1,25 @@
-# Channel type registry — P0 placeholder.
-# Each entry maps a registry slug (underscore, used in NATS subjects, metric
-# labels, GCS partitions, and code identifiers) to human metadata.
+# proto/channels.yaml — Single source of truth for channel_type strings.
 #
-# Adding a channel requires:
-#   1. An entry here (slug + display_name + status)
-#   2. An adapter package under gateway/internal/channels/<slug>/
-#   3. No proto regeneration, no SDK redeploy.
+# Rules:
+#   - channel_type on the wire is always the `name` field below (underscore form).
+#   - Webhook URL slugs use hyphen (RFC 3986): /webhooks/zoho-cliq → slug: zoho_cliq
+#   - CI rejects PRs that introduce a channel_type string not listed here.
+#   - Renames go via deprecated_aliases ONLY — never UPDATE-in-place.
+#     (Lesson: goclaw migration 58 — in-place rename broke 3 months of archived data.)
+#   - New channels get an entry here first; the gateway adapter lands separately (P3+).
 #
-# Slugs use underscore by convention. Webhook URL slugs use hyphen (RFC 3986):
-#   /webhooks/zoho-cliq  →  registry slug: zoho_cliq
-#
-# Populated in P1. First entry (zoho_cliq) lands with the gateway in P3.
-channels: []
+# status values: active | planned | deprecated
+channel_types:
+  - name: zoho_cliq
+    status: active
+  - name: slack
+    status: planned
+  - name: telegram
+    status: planned
+  - name: discord
+    status: planned
+
+# deprecated_aliases maps old slug → current slug.
+# Add here when a channel is renamed; the SDK will accept both during migration.
+# Example: zalo_oauth: zalo_oa
+deprecated_aliases: {}

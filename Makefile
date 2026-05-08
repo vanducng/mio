@@ -1,4 +1,4 @@
-.PHONY: help up down proto lint test clean gateway-build gateway-build-local
+.PHONY: help up down proto proto-lint proto-breaking proto-roundtrip lint test clean gateway-build gateway-build-local
 
 COMPOSE := docker compose -f deploy/docker-compose.yml
 BUILD_VERSION := $(shell git describe --always --dirty 2>/dev/null || echo dev)
@@ -15,6 +15,16 @@ down: ## Stop local infra
 
 proto: ## Run buf generate (outputs to proto/gen/)
 	buf generate
+
+proto-lint: ## Run buf lint (STANDARD ruleset)
+	buf lint
+
+proto-breaking: ## Run buf breaking check against main branch (WIRE_JSON ruleset)
+	buf breaking --against ".git#branch=main"
+
+proto-roundtrip: ## Run Go+Python proto round-trip test (pipes bytes; both must print OK)
+	@echo "==> Go half: marshal + subject-token validator"
+	go run ./tools/proto-roundtrip/
 
 lint: ## Run buf lint + go vet
 	buf lint
