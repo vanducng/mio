@@ -32,9 +32,7 @@ node_modules/
 proto/gen/
 
 # local-only working areas (design docs, scratch, channel POCs)
-plans/*
-!plans/260507-0904-mio-bootstrap/
-!plans/260507-0904-mio-bootstrap/**
+plans/
 playground/
 
 # local data
