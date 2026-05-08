@@ -1,4 +1,4 @@
-.PHONY: help up down proto proto-gen proto-lint proto-breaking proto-roundtrip sdk-go-test sdk-py-test sink-gcs-test sink-gcs-build-local sink-gcs-build lint test clean gateway-build gateway-build-local gateway-test gateway-migrate
+.PHONY: help up down proto proto-gen proto-lint proto-breaking proto-roundtrip sdk-go-test sdk-py-test sink-gcs-test sink-gcs-build-local sink-gcs-build lint test clean gateway-build gateway-build-local gateway-test gateway-migrate echo-up echo-logs echo-consumer-test
 
 COMPOSE := docker compose -f deploy/docker-compose.yml
 BUILD_VERSION := $(shell git describe --always --dirty 2>/dev/null || echo dev)
@@ -73,3 +73,12 @@ sink-gcs-build: ## Build sink-gcs Docker image with version tag (no push)
 	docker build -f sink-gcs/Dockerfile \
 		--build-arg BUILD_VERSION=$(BUILD_VERSION) \
 		-t mio/sink-gcs:$(BUILD_VERSION) .
+
+echo-up: ## Start echo-consumer (+ nats + gateway deps) via docker compose
+	$(COMPOSE) up -d echo-consumer
+
+echo-logs: ## Tail echo-consumer logs
+	$(COMPOSE) logs -f echo-consumer
+
+echo-consumer-test: ## Run echo-consumer unit tests (no live NATS needed)
+	uv run --project examples/echo-consumer pytest examples/echo-consumer/tests/ -v

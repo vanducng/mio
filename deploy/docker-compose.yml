@@ -101,3 +101,16 @@ services:
       minio:
         condition: service_healthy
     restart: unless-stopped
+
+  echo-consumer:
+    build:
+      context: ..
+      dockerfile: examples/echo-consumer/Dockerfile
+    environment:
+      NATS_URL: nats://nats:4222
+    depends_on:
+      nats:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+    restart: on-failure

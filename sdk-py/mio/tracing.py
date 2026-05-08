@@ -12,7 +12,7 @@ Callers that need W3C tracecontext must register the propagator at startup:
 from __future__ import annotations
 
 from opentelemetry import trace, propagate, context
-from opentelemetry.trace import SpanKind, Span, TracerProvider, NonRecordingSpan
+from opentelemetry.trace import SpanKind, Span, TracerProvider
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 _TRACER_NAME = "github.com/vanducng/mio/sdk-py"
@@ -27,8 +27,10 @@ class _DictCarrier:
     def __init__(self, headers: dict[str, str]) -> None:
         self._headers = headers
 
-    def get(self, key: str) -> str | None:
-        return self._headers.get(key)
+    def get(self, key: str, default: str | None = None) -> str | None:
+        # OTel >= 1.30 DefaultGetter calls carrier.get(key, default).
+        # Accept the optional default to stay compatible with both old and new OTel.
+        return self._headers.get(key, default)
 
     def set(self, key: str, value: str) -> None:
         self._headers[key] = value
@@ -54,13 +56,15 @@ def inject_trace(
     span = tracer.start_span(
         "mio.publish",
         kind=SpanKind.PRODUCER,
+        context=ctx,
         attributes={
             "messaging.system": "nats",
             "messaging.destination": subject,
             "messaging.message_id": msg_id,
         },
     )
-    ctx_with_span = trace.use_span(span, end_on_exit=False).__enter__()  # type: ignore[attr-defined]
+    # OTel 1.x API: set_span_in_context replaces the deprecated use_span().
+    ctx_with_span = trace.set_span_in_context(span, ctx)
 
     carrier = _DictCarrier(headers)
     _PROPAGATOR.inject(carrier, context=ctx_with_span)
