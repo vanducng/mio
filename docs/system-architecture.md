@@ -178,21 +178,21 @@ Two streams, both file-backed, both `mio.v1` envelope.
 ### Subject grammar
 
 ```
-mio.<direction>.<channel>.<workspace_id>.<thread_id>[.<message_id>]
-        ▲           ▲           ▲              ▲           ▲
-        │           │           │              │           └─ optional, for edit/delete commands
-        │           │           │              └─ enables per-thread ordering filters
-        │           │           └─ per-workspace rate-limit / multi-tenant scoping
-        │           └─ adapter (zoho-cliq, slack, telegram, discord)
+mio.<direction>.<channel_type>.<account_id>.<conversation_id>[.<message_id>]
+        ▲              ▲             ▲              ▲                ▲
+        │              │             │              │                └─ optional, for edit/delete commands
+        │              │             │              └─ enables per-conversation ordering filters
+        │              │             └─ per-account rate-limit / multi-tenant scoping (one tenant may run multiple accounts)
+        │              └─ registry slug from proto/channels.yaml (zoho_cliq, slack, telegram, discord) — underscore for multi-word
         └─ inbound | outbound
 ```
 
 Examples:
 
 ```
-mio.inbound.zoho-cliq.workspace-1.thread-42
-mio.outbound.slack.acme-corp.C0123ABC.1700000000-123456
-mio.outbound.zoho-cliq.workspace-1.thread-42.msg-abc.edit
+mio.inbound.zoho_cliq.<account-uuid>.<conv-uuid>
+mio.outbound.slack.<account-uuid>.<conv-uuid>.<msg-uuid>
+mio.outbound.zoho_cliq.<account-uuid>.<conv-uuid>.<msg-uuid>
 ```
 
 Why these dimensions live in the subject:
@@ -200,9 +200,9 @@ Why these dimensions live in the subject:
 | Dimension | Rationale |
 |---|---|
 | `direction` | One stream per direction; subject prefix lets a single filter scope a consumer cleanly. |
-| `channel` | Per-channel sender pools, per-channel rate-limit buckets, per-channel sinks. |
-| `workspace_id` | Per-workspace rate limits — one chatty tenant must not starve others. |
-| `thread_id` | Future-proofs partition-per-thread when global `MaxAckPending=1` graduates. |
+| `channel_type` | Per-channel sender pools, per-channel rate-limit buckets, per-channel sinks. Registry slug, not enum. |
+| `account_id` | Per-account rate limits — one chatty workspace must not starve others; idempotency key with `source_message_id`. |
+| `conversation_id` | Future-proofs partition-per-conversation when global `MaxAckPending=1` graduates (subject-shard). |
 
 ---
 

@@ -66,15 +66,36 @@ once load demands it (documented in master.md → Risks).
 
 ## Code skeleton
 
+The consumer drives `mio.Client.consume_inbound(durable="ai-consumer")` —
+the SDK's async iterator (P2 Step 8). Internally the SDK runs a 5-second
+pull-fetch loop, so even when no messages arrive the iterator yields
+control back to this loop every 5s. That gives SIGTERM a clean
+shutdown granularity without `docker kill -9`.
+
+**Why iterator, not raw `pull_subscribe + fetch`:** the SDK already owns
+the pull-fetch loop, OTel context extraction, dedup-on-consume, and
+backpressure metric emission (P2 contract). The consumer just consumes
+the typed iterator. There is **no** `pull_subscribe_inbound` surface in
+sdk-py; if a future workload needs raw fetch control, P2 grows that
+surface — P4 doesn't reach around the SDK.
+
+Signal handlers are registered **before** the iterator opens. Cancellation
+is via the `stop` event checked between iterations (or `asyncio.CancelledError`
+propagating through the iterator close path; both work — see notes).
+
 ```python
-import asyncio, signal
+import asyncio, os, signal
 from ulid import ULID
 import mio                                 # sdk-py
 from mio.gen.mio.v1 import Message, SendCommand
 
+NATS_URL = os.environ["NATS_URL"]
+
 async def handle(msg: Message, client: mio.Client) -> SendCommand:
+    # No schema check here — sdk-py Verify (P2) rejects bad versions before
+    # the message reaches handle(). Keep this function pure.
     cmd = SendCommand(
-        id=str(ULID()),
+        id=str(ULID()),                     # idempotency address: out:<id>
         schema_version=1,
         # four-tier scope — preserved from inbound
         tenant_id=msg.tenant_id,
@@ -87,7 +108,7 @@ async def handle(msg: Message, client: mio.Client) -> SendCommand:
         thread_root_message_id=msg.thread_root_message_id or msg.source_message_id,
         # payload
         text=f"echo: {msg.text}",
-        # this is a fresh send, not an edit
+        # fresh send, not an edit
         edit_of_message_id="",
         edit_of_external_id="",
         attributes={"replied_to": msg.id},
@@ -96,37 +117,71 @@ async def handle(msg: Message, client: mio.Client) -> SendCommand:
     return cmd
 
 async def main():
+    # 1. Register signal handlers FIRST — before any long-running await.
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, stop.set)
 
+    # 2. Connect + iterate. The SDK owns pull-fetch + 5s timeout internally,
+    #    so the `stop.is_set()` check below runs at most ~5s after the signal.
     async with mio.Client.connect(url=NATS_URL, name="echo-consumer") as client:
         async for delivery in client.consume_inbound(durable="ai-consumer"):
             try:
-                await handle(delivery.message, client)
+                await handle(delivery.msg, client)     # P2 Delivery.msg
                 await delivery.ack()
             except Exception:
-                await delivery.nak(delay=5)        # retried up to max_deliver
+                await delivery.nak(delay=5)            # retried up to max_deliver
             if stop.is_set():
-                break
+                break                                  # exits iterator → SDK closes pull sub cleanly
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-Note: every field on `SendCommand` is a string except for `attachments`
-(empty here) and `attributes` — all proto-generated. `mio.Client` enforces
-`schema_version=1` and the `channel_type ∈ Known` registry check.
+Notes:
+- The P2 SDK's `consume_inbound()` returns `AsyncIterator[Delivery]` and
+  internally fetches with a 5s timeout (P2 Step 8). Iterator exit (break,
+  return, exception, or `asyncio.CancelledError`) closes the pull
+  subscription cleanly — no manual `unsubscribe()` here.
+- Every `SendCommand` field is a string except `attachments` (empty here) and
+  `attributes` — all proto-generated.
+- `mio.Client` (P2) enforces `schema_version=1` on **publish** via Verify.
+  Consume-side does NOT validate (P2 publish/consume asymmetry).
+- Backpressure metric `mio_consumer_pending` is emitted by the SDK from
+  `consumer_info.num_pending`; alert at `pending > 10 for >30s`.
+- Term policy for poison pills (e.g., schema v2) is deferred to **P5**;
+  for now `nak(delay=5)` + `max_deliver=5` is the cap.
 
 ## Steps
 
-1. `pyproject.toml`: depends on `mio-sdk` (local path in dev, PyPI later), `python-ulid`. Python 3.12.
-2. `echo.py` per skeleton above. Single-file; no extra modules.
-3. Dockerfile: `python:3.12-slim`, `pip install .`, `CMD ["python", "echo.py"]`.
-4. docker-compose service: depends on `nats` healthy + `gateway` started; `restart: on-failure`; env `NATS_URL=nats://nats:4222`.
-5. README: how to run, where to point gateway, what to look for in `nats stream view MESSAGES_OUTBOUND`.
-6. Smoke check: `make echo-up`, `curl -d @gateway/integration_test/fixtures/cliq-message.json http://localhost:8080/webhooks/zoho-cliq`, observe logs + outbound stream.
+1. **Package** — `pyproject.toml` depends on `mio-sdk` (local path in dev,
+   PyPI later) and `python-ulid`. Python 3.12.
+2. **Script** — `echo.py` per skeleton above. Single-file; no extra modules.
+   Key invariants:
+   - signal handlers registered before `async for delivery` opens
+   - consume via `client.consume_inbound(durable=...)` async iterator (P2 surface; SDK owns the 5s pull-fetch)
+   - exit on `stop.is_set()` between iterations; iterator close releases the pull subscription
+   - `handle()` does **no** schema validation — that lives in SDK Verify (P2)
+3. **Consumer config** — created idempotently on first run via
+   `js.add_consumer(stream="MESSAGES_INBOUND", durable_name="ai-consumer", ...)`.
+   Same name reused by production AI service in MIU. If config drifts
+   (e.g. `MaxAckPending` change), NATS errors; manual reconciliation for now,
+   automated by P7 bootstrap Job (see Risks).
+4. **Dockerfile** — `python:3.12-slim`, `pip install --no-cache-dir -e .`,
+   `CMD ["python", "echo.py"]`.
+5. **docker-compose** — service depends on `nats` healthy + `gateway` started;
+   `restart: on-failure`; env `NATS_URL=nats://nats:4222`.
+6. **README** — how to run, where to point gateway, what to look for in
+   `nats stream view MESSAGES_OUTBOUND`.
+7. **Smoke check** — `make echo-up`, then
+   `curl -d @gateway/integration_test/fixtures/cliq-message.json http://localhost:8080/webhooks/zoho-cliq`,
+   observe logs + outbound stream.
+8. **Shutdown check** — `docker compose kill -s SIGTERM echo-consumer`;
+   container exits within ~5s (signal sets `stop`; next iteration tick exits the iterator;
+   SDK closes the pull subscription cleanly — logs show `consumer closed durable=ai-consumer`).
+9. **Burst check** — replay 100 inbound messages in <1s; verify
+   `mio_consumer_pending` peaks <50 and drains to 0 within 5s.
 
 ## Success Criteria
 
@@ -136,17 +191,37 @@ Note: every field on `SendCommand` is a string except for `attachments`
 - [ ] When inbound has `thread_root_message_id` set, outbound `SendCommand.thread_root_message_id` equals it (reply-in-thread preserved); otherwise fall back to `source_message_id` so a fresh thread roots cleanly
 - [ ] Replay same inbound 5× → 5 outbound `SendCommand`s (each has a fresh `id`; gateway sender will handle outbound dedup separately at the platform level)
 - [ ] Killing the consumer mid-flight → message redelivered after `ack_wait=30s`
-- [ ] Schema-version mismatch (set `schema_version=2` in a hand-crafted publish) → consumer rejects + nak's
+- [ ] Schema-version mismatch (set `schema_version=2` in a hand-crafted publish) → SDK Verify rejects before `handle()` is called (handler stays clean)
+- [ ] **SIGTERM produces clean shutdown ≤6s** (one 5s fetch tick + ack drain) — `docker compose kill -s SIGTERM` exits container; no `docker kill -9` needed
+- [ ] **SDK closes pull subscription on iterator exit** — logs show `consumer closed durable=ai-consumer`; `nats consumer info MESSAGES_INBOUND ai-consumer` reports the durable still exists (durable is intentional) but no leaked ephemeral state from this consumer instance
+- [ ] **Backpressure metric visible during burst** — replay 100 messages in <1s; `mio_consumer_pending` gauge peaks (visible via `/metrics`) then drains to 0 within 5s
 
 ## Risks
 
-- **Schema-version mismatch** — `sdk-py` Verify guards on consume; fail fast on unknown major.
-- **Async-context lifecycle** — `nats-py` JetStream pull subscriptions need explicit close on shutdown signal; the `async with` + signal-handler pattern above handles it.
-- **Acks under exception** — wrap handler in try/except; on error, `nak` with delay so MaxDeliver counts work and poison messages get terminated.
-- **`channel_type` registry drift** — if the consumer image is older than the gateway and a new `channel_type` lands, the consumer rejects publishes for it. Mitigation: `mio-sdk` consumer-side does NOT validate `channel_type` on consume (only on publish); document this asymmetry.
-- **Thread fallback for fresh DMs** — using `source_message_id` as `thread_root_message_id` for non-threaded messages produces a virtual thread per DM. P5 outbound must treat empty thread root identically; verify before locking.
+- **Schema-version mismatch** — `sdk-py` Verify guards on consume; fail fast on unknown major. Handler stays clean (no schema check in `handle()`).
+- **Async-iter shutdown hang** — a naive `async for delivery in sub.messages` with no internal timeout would hang on SIGTERM until the next message arrives. **Mitigated** at the SDK level: P2's `consume_inbound()` runs an internal 5s pull-fetch loop, so the iterator yields control every ~5s and `stop.is_set()` checks fire promptly.
+- **Subscription leak on container restart** — without clean iterator shutdown, ephemeral pull state could leak. **Mitigated** by P2 contract: the iterator's `aclose()` (triggered by `break`/cancel/exit) closes the pull subscription. Durable consumer (`ai-consumer`) is intentionally persistent — that's the point of a durable.
+- **Consumer config drift on redeploy** — `js.add_consumer()` is idempotent only when config matches; changing `MaxAckPending` or `ack_wait` makes NATS reject creation. **Mitigated** for P4 via manual reconciliation (`nats consumer del MESSAGES_INBOUND ai-consumer --force`); **P7** introduces a bootstrap Job that owns reconciliation.
+- **Poison pill termination policy** — current loop `nak(delay=5)` + `max_deliver=5`, then NATS drops. Whether to `term()` immediately on schema-mismatch vs let `max_deliver` run out is **deferred to P5** (along with DLQ stream design).
+- **Backpressure under burst** — `MaxAckPending=1` blocks all subsequent messages while a nak waits. SDK emits `mio_consumer_pending` gauge; alert at `pending > 10 for >30s`. Graduation path (subject sharding) documented in master.md.
+- **Acks under exception** — `handle()` wrapped in try/except; on error, `nak(delay=5)` so MaxDeliver counts work.
+- **`channel_type` registry drift** — `mio-sdk` consume-side does NOT validate `channel_type`; only publish-side does. Documented asymmetry — older consumer image still drains newer-typed inbound, won't reject on the consume edge.
+- **Thread fallback for fresh DMs** — using `source_message_id` as `thread_root_message_id` for non-threaded messages produces a virtual thread per DM. P5 outbound must treat empty thread root identically; verify before locking (Cliq semantics need a P5 acceptance test).
 
 ## Out (deferred)
 
 - Retry budget per conversation — currently per-message via `max_deliver`; cross-message backoff is a P5+ concern.
 - Real AI logic — lives in MIU.
+
+## Research backing
+
+[`plans/reports/research-260508-1056-p4-echo-consumer-jetstream-pull.md`](../../reports/research-260508-1056-p4-echo-consumer-jetstream-pull.md)
+
+Findings folded into Steps / skeleton / Risks above:
+- **`fetch(timeout=5)` loop** chosen over `async for delivery` for clean SIGTERM behavior.
+- **Signal handlers registered before subscription opens.**
+- **Explicit `unsubscribe()` in `finally`** to avoid server-side state leak on container restart.
+- **Schema rejection stays in SDK Verify (P2)** — handler is pure.
+- **Backpressure metric** `mio_consumer_pending` emitted by SDK; alert threshold `> 10 for >30s`.
+- **Consumer config drift** mitigated manually for P4; automated reconciliation deferred to P7.
+- **Poison-pill `term()` policy** deferred to P5 along with DLQ design.

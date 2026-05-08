@@ -57,7 +57,7 @@ Subject grammar realigned: `mio.<dir>.<channel_type>.<account_id>.<conversation_
 - [ ] **End-to-end loop in GKE** — Cliq webhook lands in cluster, AI echo-consumer sees the message, reply appears in the same Cliq thread within 5s
 - [ ] **Per-thread ordering** — `MaxAckPending=1` consumer in cluster confirmed via load test
 - [ ] **Idempotency** — replaying the same Cliq webhook 5× produces exactly one downstream publish
-- [ ] **GCS archive populated** — `gs://mio-messages/channel=zoho-cliq/date=YYYY-MM-DD/` has the expected payloads
+- [ ] **GCS archive populated** — `gs://mio-messages/channel_type=zoho_cliq/date=YYYY-MM-DD/` has the expected payloads
 - [ ] **Per-workspace rate limit** — bursting one workspace doesn't delay another's outbound throughput
 - [ ] **Second channel adapter ≤1 day** — Slack or Telegram inbound + outbound shipped in a single working day; no proto changes required
 
@@ -129,10 +129,34 @@ P6 can run parallel to P3–P5 if I want a second front. Default: sequential.
 
 > Append a one-liner each time a phase status flips or a pre-phase slot completes. Newest at top.
 
+- 2026-05-08 11:53 — Deep research dispatched on local-dev tooling + CI/CD + image-publish strategy ([research-260508-1153](../reports/research-260508-1153-local-dev-cicd-image-publish.md), 1211 lines, --deep mode). Picks: **mise** (single-file `.mise.toml` for Go 1.23 + Python 3.12 + buf + protoc; tasks delegate to Makefile, no replacement); **single GHA workflow** with `dorny/paths-filter@v3` (gateway/sdk-py/proto path-scoped jobs); **`docker/build-push-action@v6` + `gcr.io/distroless/static-debian12:nonroot`** for the gateway Go binary (multi-stage, registry cache, sha + version tags, no `latest`); **direct `helm upgrade --set image.tag=<sha>`** from GHA (GitOps via ArgoCD/Flux deferred). Phase integration: no new phase — folds into P0 (`.mise.toml`, `.dockerignore`, Makefile targets), P3 (`gateway/Dockerfile`), P6 (`sink-gcs/Dockerfile`), P7 (`.github/workflows/ci.yaml` + `deploy.yaml`, image block in `values.yaml`, imagePullSecret), P8 (GHA→GKE auth via GCP service-account JSON for POC; WIF deferred). Defer: cosign signing, SBOM, multi-arch, Trivy gate (Trivy GHA action was supply-chain-compromised March 2026 — pin SHAs if used).
+- 2026-05-08 11:39 — Cross-phase audit (review-260508-1133) drift fixes applied: (1) P9 adapter self-registration aligned to P5's locked `sender.RegisterAdapter(adapter)` instance API (was `dispatcher.Register(slug, factory)` — wrong package, wrong signature, contradicted "zero edits to dispatch.go"); (2) P3 ai-consumer `MaxAckPending=1` clarified as **global** with subject-shard graduation path (was "per account_id+conversation_id" — that's the graduation, not POC); (3) `master.md` Success Criterion partition path corrected `channel=zoho-cliq` → `channel_type=zoho_cliq`; (4) `docs/system-architecture.md` §5 subject grammar block + examples updated to realigned `mio.<dir>.<channel_type>.<account_id>.<conversation_id>` form (P2:67 carry-over patched); (5) webhook URL slug locked to **hyphen** per web URL convention (`/webhooks/zoho-cliq`); registry slug / NATS subject / metric label / GCS partition stay underscore (`zoho_cliq`); router maps URL hyphen → registry underscore in `server.go`; (6) P7 + P8 gateway rollout strategy flipped `maxSurge:1, maxUnavailable:0` → `maxSurge:0, maxUnavailable:1` — sequential rollout enforces single-writer for `AddOrUpdateStream` until split-brain risk resolved; (7) P9 Risks block surfaced thread-root backfill as a master-level deferred item (was buried in step-7 prose only).
+- 2026-05-08 11:30 — All 10 phase plans rewritten in place to integrate research findings as concrete Steps/Files/Success Criteria/Risks (vs the earlier append-only "Research backing" summaries). Foundation review + red-team round complete (P0–P3). Three foundation fixes applied: (1) P0 `buf` `breaking.use` corrected from invalid `STANDARD` to `WIRE_JSON` (matches P1; STANDARD isn't a valid v2 breaking ruleset); (2) P1 `lint.use` aligned to STANDARD (v1 alias `DEFAULT` retired); (3) P4 ↔ P2 SDK consume surface reconciled — P4 now uses P2's `consume_inbound(durable) → AsyncIterator[Delivery]` (which owns the 5s pull-fetch internally), not the non-existent `pull_subscribe_inbound`. Three deferred risks added: P3 inbound bad-signature DDoS brake at ingress (before P9), stream-config split-brain across gateway replicas (single-replica until P7), P9 thread-root backfill mechanism (defer to P10 MessageRelation).
+- 2026-05-08 11:06 — Deep research dispatch complete. 10 phase-backing reports landed in `plans/reports/research-260508-1056-pN-*.md` (one per P0–P9). Notable findings to fold during /vd:cook: P0 add health checks + `go.work` to .gitignore; P2 use new `jetstream` v2 API + `uv` for Python; P3 needs live Cliq verify (DM signal, deadline, response shape); P5 adapter self-register via `init()` confirms P9 zero-edit litmus; P6 filename collision on pod restart — switch to offset-based naming before multi-pod; P7 single source of truth for stream provisioning is gateway startup (bootstrap Job is logs-only); P8 use Tempo+GCS, ad-hoc kubectl/toxiproxy injection, ~$430/mo; P9 use conversation-object boolean flags (`is_im`/`is_mpim`/`is_private`) not channel-id prefixes for kind detection — litmus PASSES.
 - 2026-05-07 11:39 — All phases (P0–P9) realigned to locked-in foundation: `channel_type` registry slug (underscore), per-account rate limit, four-tier scope on every wire+SDK+adapter ref, JS stream/consumer defs locked in P3+P7, P4 echo rewritten, P9 litmus made concrete (channels.yaml flip + adapter package; no proto edits)
 - 2026-05-07 09:53 — Master plan revised: slot column synced to 09:10 start, P0 reset to `pending`, template progress entries cleared
 - 2026-05-07 09:10 — Morning session resumed (NATS playground slot 09:10–09:55)
 - 2026-05-07 09:04 — Plan dir created via `/vd:plan`; phase files P0–P9 scaffolded
+
+## Revisions (post-research red-team)
+
+| When | Who | Phase | Change |
+|---|---|---|---|
+| 2026-05-08 11:39 | audit | P9 | Adapter `init()` aligned to P5's locked `sender.RegisterAdapter(adapter)` (instance form, `sender/registry.go`) — replaces the incorrect `dispatcher.Register(slug, factory)` form (wrong package, wrong signature, self-contradicted "zero edits to `dispatch.go`") |
+| 2026-05-08 11:39 | audit | P3 | `ai-consumer` MaxAckPending wording fixed: "MaxAckPending=1 globally (graduation: subject-shard …)" — was "per account_id+conversation_id pair" which conflated POC with graduation path; now matches P4/P7/arch-doc |
+| 2026-05-08 11:39 | audit | master + arch-doc | Stale subject grammar / partition path patched: `master.md:60` `channel=zoho-cliq` → `channel_type=zoho_cliq`; `docs/system-architecture.md` §5 block + examples updated to realigned `mio.<dir>.<channel_type>.<account_id>.<conversation_id>` (carry-over flagged in P2:67) |
+| 2026-05-08 11:45 | decision | P3 + P4 + P7 + P8 | Cliq webhook URL slug locked to **hyphen** per web URL convention (RFC 3986 / Google guidelines): `/webhooks/zoho-cliq`. Registry slug, NATS subject token, metric label, GCS partition, code identifier stay **underscore** (`zoho_cliq`). Router maps URL hyphen → registry underscore via `strings.ReplaceAll(slug, "-", "_")` in `server.go`. Two slugs by design: URLs follow web standard, internal identifiers follow code/subject standard. |
+| 2026-05-08 11:53 | research | P0 | Added `.mise.toml` (Go 1.23 + Python 3.12 + buf + protoc), `.dockerignore`, and `gateway-build` / `gateway-build-local` Makefile targets to scope. Tooling baseline locked before P3 Dockerfile lands. |
+| 2026-05-08 11:53 | research | P3 | `gateway/Dockerfile` line item expanded: multi-stage (`golang:1.23-alpine` builder → `gcr.io/distroless/static-debian12:nonroot` runtime), `CGO_ENABLED=0` static binary, USER 65532, EXPOSE 8080. Build context is repo root (not `gateway/`) so `go.work`-free single-module copy works. |
+| 2026-05-08 11:53 | research | P6 | `sink-gcs/Dockerfile` line item expanded with same distroless pattern as P3 (Go binary; research's "Python sink" suggestion contradicts P6 plan which is Go — Go pattern stays). |
+| 2026-05-08 11:53 | research | P7 | New section "8. CI/CD + image publish" added: `.github/workflows/ci.yaml` (single workflow, `dorny/paths-filter@v3`, mise-bootstrapped, buf lint + breaking + golangci-lint + ruff + go test + pytest + image build/push to ghcr.io with sha + branch tags, registry cache); `.github/workflows/deploy.yaml` runs on `push: main` → `helm upgrade --set image.tag=<sha>` against GKE; `deploy/charts/mio-gateway/values.yaml` image block uses `ghcr.io/vanducng/mio/gateway` repo + tag override; imagePullSecret created in `mio` namespace via `setup.sh`. |
+| 2026-05-08 11:53 | research | P8 | Added GHA→GKE auth via static GCP service-account JSON in `secrets.GCP_SA_JSON` (Workload Identity Federation deferred to P10); imagePullSecret bootstrap step added before first `helm upgrade`. |
+| 2026-05-08 11:39 | audit | P7 + P8 | Gateway Deployment rollout strategy flipped `maxSurge:1, maxUnavailable:0` → `maxSurge:0, maxUnavailable:1` — sequential rollout enforces single-writer for `AddOrUpdateStream` until split-brain risk resolved; LB drain still works via `connection_draining_timeout_sec:300` on surviving replica |
+| 2026-05-08 11:39 | audit | P9 | Risks block surfaces thread-root backfill as master-level deferred item (was buried in step-7 prose only); now matches the three deferred-risk roster |
+| 2026-05-08 11:30 | red-team | P0 | `buf breaking.use` corrected `STANDARD` → `WIRE_JSON`; `STANDARD` is not a valid v2 breaking ruleset |
+| 2026-05-08 11:30 | red-team | P1 | `buf lint.use` aligned `DEFAULT` → `STANDARD` (v2 canonical name) |
+| 2026-05-08 11:30 | red-team | P4 | Skeleton uses P2's `consume_inbound()` async iterator (the actual SDK surface), removing the fictitious `pull_subscribe_inbound` call that drifted the consume contract from sdk-py |
+| 2026-05-08 11:30 | red-team | P3 | `Out (deferred)` block grew: inbound bad-signature DDoS brake at ingress (NGINX/Cloud Armor) before P9, and stream-config split-brain assumption documented for >1 gateway replica |
 
 ## References
 
@@ -140,3 +164,20 @@ P6 can run parallel to P3–P5 if I want a second front. Default: sequential.
 - Narrative + roadmap: `plans/plan.md` (local-only)
 - NATS hands-on rig: `playground/nats/` (local-only)
 - Cliq POC carry-over: `playground/cliq/` (local-only)
+
+### Research backing (deep, --deep mode, 2026-05-08)
+
+| Phase | Report |
+|---|---|
+| Foundation (channels data model) | [research-260507-1102-channels-data-model.md](../reports/research-260507-1102-channels-data-model.md) |
+| P0 — Reserve + scaffold | [research-260508-1056-p0-scaffold-monorepo-infra.md](../reports/research-260508-1056-p0-scaffold-monorepo-infra.md) |
+| P1 — Proto v1 envelope | [research-260508-1056-p1-proto-envelope-design.md](../reports/research-260508-1056-p1-proto-envelope-design.md) |
+| P2 — SDKs (sdk-go + sdk-py) | [research-260508-1056-p2-sdk-nats-jetstream-clients.md](../reports/research-260508-1056-p2-sdk-nats-jetstream-clients.md) |
+| P3 — Gateway + Cliq inbound | [research-260508-1056-p3-gateway-cliq-inbound-webhook.md](../reports/research-260508-1056-p3-gateway-cliq-inbound-webhook.md) |
+| P4 — Echo consumer | [research-260508-1056-p4-echo-consumer-jetstream-pull.md](../reports/research-260508-1056-p4-echo-consumer-jetstream-pull.md) |
+| P5 — Outbound path → Cliq | [research-260508-1056-p5-outbound-rate-limit-edit-ux.md](../reports/research-260508-1056-p5-outbound-rate-limit-edit-ux.md) |
+| P6 — Sink-gcs | [research-260508-1056-p6-sink-gcs-archival-bigquery.md](../reports/research-260508-1056-p6-sink-gcs-archival-bigquery.md) |
+| P7 — Helm + NATS on GKE | [research-260508-1056-p7-helm-nats-jetstream-gke.md](../reports/research-260508-1056-p7-helm-nats-jetstream-gke.md) |
+| P8 — POC deploy on GKE | [research-260508-1056-p8-poc-deploy-observability-gke.md](../reports/research-260508-1056-p8-poc-deploy-observability-gke.md) |
+| P9 — Second channel adapter | [research-260508-1056-p9-slack-adapter-second-channel.md](../reports/research-260508-1056-p9-slack-adapter-second-channel.md) |
+| Cross-cutting — Local-dev tooling + CI/CD + image publishing | [research-260508-1153-local-dev-cicd-image-publish.md](../reports/research-260508-1153-local-dev-cicd-image-publish.md) |

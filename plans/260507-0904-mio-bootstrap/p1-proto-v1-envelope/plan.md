@@ -39,6 +39,9 @@ on consume) passes both Go and Python sides.
   - `proto/channels.yaml` — `channel_type` registry (single source of truth, read by SDK + CI)
   - `proto/buf.lock` (auto by `buf dep update`)
   - `tools/proto-roundtrip/main.go` (smoke test, throwaway location)
+  - `tools/proto-roundtrip/go.mod` (pins `google.golang.org/protobuf` to a stable v1.x)
+  - `tools/proto-roundtrip/requirements.txt` (pins `protobuf>=4.27.0,<5.0.0` for the Python half)
+  - `CONTRIBUTING.md` — short doc with the `attributes` promotion rule + `channel_type` registry rule (research Q4, Q3)
 
 Not creating `channel.proto` or `user.proto` as separate messages — channel
 identity is flat on Message (`tenant_id`, `account_id`, `channel_type`);
@@ -188,32 +191,57 @@ deprecated_aliases: {}   # e.g. zalo_oauth: zalo_oa
 
 ## Steps
 
-1. Write the five `.proto` files; `package mio.v1;` everywhere.
-2. Write `proto/channels.yaml` with `zoho_cliq` only (others added at adapter time).
-3. `buf.yaml` updates: `breaking.use: [FILE]`, `lint.use: [DEFAULT]`.
-4. `buf lint` clean → `buf breaking --against '.git#branch=main'` passes (first run trivially).
-5. `buf generate` produces `proto/gen/go/mio/v1/` and `proto/gen/py/mio/v1/`.
-6. `tools/proto-roundtrip/main.go`: connect to local NATS, publish a populated `Message{}` (with non-zero tenant_id, account_id, conversation_id, conversation_kind=DM, sender etc.), subscribe ephemeral, decode, assert field-by-field equality. Print `OK`.
-7. Add `make proto-roundtrip` target.
-8. Commit. PR title: `feat(proto): add mio.v1 envelope`.
+1. **Write the five `.proto` files** with `package mio.v1;` everywhere.
+   - [ ] `enums.proto`: every enum's `0` value is `_UNSPECIFIED` (research Q3 — proto3 open-enum default-zero rule).
+   - [ ] `message.proto`: `import "google/protobuf/timestamp.proto";` for `received_at` (research Q7 — no Unix int64).
+   - [ ] `message.proto`: emit explicit `reserved 17;` (MessageRelation, P5) and `reserved 18;` (is_summary, P6).
+   - [ ] `send_command.proto`: emit explicit `reserved 15;` (MessageRelation mirror).
+   - [ ] Comment block on `attributes` field in both Message and SendCommand pointing at the promotion rule in `CONTRIBUTING.md`.
+2. **Write `proto/channels.yaml`** with `zoho_cliq` (status: active) only. Other platforms get added at adapter time. `deprecated_aliases: {}` placeholder for future renames (no UPDATE-in-place — research Q9 / goclaw migration 58).
+3. **Configure `buf.yaml`** (matches the P0 scaffold; restated here for clarity):
+   - [ ] `lint.use: [STANDARD]` — v2 canonical name (the v1 `DEFAULT` alias still works but STANDARD is what `buf config ls-lint-rules` reports).
+   - [ ] `breaking.use: [WIRE_JSON]` — research Q10 confirms: catches field renames that would break the JSON-encoded GCS sink (P6) and BigQuery external tables (P8). NOT `WIRE` (binary-only) and NOT `FILE` (too strict for normal proto evolution).
+4. **Validate the protos**:
+   - [ ] `buf lint` clean.
+   - [ ] `buf breaking --against '.git#branch=main'` passes (trivial on first run; confirms WIRE_JSON ruleset is wired correctly for future PRs).
+   - [ ] Manual grep: every `enum` block has a `*_UNSPECIFIED = 0` first value.
+5. **Generate code**: `buf generate` produces `proto/gen/go/mio/v1/` and `proto/gen/py/mio/v1/`. Both must build/import without errors.
+6. **Pin protobuf library versions** (research Q7 — prevents Go/Python JSON-serialization skew that bit goclaw):
+   - [ ] `tools/proto-roundtrip/go.mod` pins `google.golang.org/protobuf` to a single stable v1.x.
+   - [ ] `tools/proto-roundtrip/requirements.txt` pins `protobuf>=4.27.0,<5.0.0`.
+7. **Write `tools/proto-roundtrip/main.go`**: connect to local NATS, publish a populated `Message{}` (non-zero `tenant_id`, `account_id`, `channel_type="zoho_cliq"`, `conversation_id`, `conversation_external_id`, `conversation_kind=DM`, `parent_conversation_id`, `source_message_id`, `thread_root_message_id`, `sender`, `received_at`, `attributes` with ≥1 entry), subscribe ephemeral, decode in **both Go and Python**, assert field-by-field equality. Round-trip must also exercise each `reserved` field gap (parse a hand-crafted message that sets unknown field 17 → ensure decoder doesn't blow up). Print `OK`.
+8. **Add subject-token validation helper** in the round-trip tool: regex `^[a-zA-Z0-9_-]+$` on every token of `mio.<dir>.<channel_type>.<account_id>.<conversation_id>` before publish (research Q8). Reject dots in any token. This helper is the seed for the SDK's publish-time validator in P2.
+9. **Write `CONTRIBUTING.md`** with two short sections (research Q4, Q3):
+   - [ ] **`attributes` promotion rule**: any `attributes[key]` read by ≥2 consumers OR written by ≥2 channels gets promoted to a typed proto field with backfill. Code review enforces. Use named constants (`const AttrSlackTS = "slack_ts"`), not string literals.
+   - [ ] **`channel_type` registry rule**: new entries go into `proto/channels.yaml` only; renames go via `deprecated_aliases`, never UPDATE-in-place.
+10. **Add `make proto-roundtrip` target** (runs both Go and Python halves; either failing fails the build).
+11. **Commit**. PR title: `feat(proto): add mio.v1 envelope`.
 
 ## Success Criteria
 
 - [ ] `buf lint` clean
-- [ ] `buf breaking --against '.git#branch=main'` passes
+- [ ] `buf breaking --against '.git#branch=main'` runs the **WIRE_JSON** ruleset clean (verify with `buf config ls-breaking-rules` listing WIRE_JSON rules, not just WIRE)
 - [ ] `buf generate` outputs into `proto/gen/{go,py}` without errors
-- [ ] `make proto-roundtrip` exits 0 and prints `OK`
+- [ ] `make proto-roundtrip` exits 0 and prints `OK` for both Go and Python halves
 - [ ] Generated Go and Python types both decode the same wire bytes
-- [ ] Round-trip test exercises **all** of: tenant_id, account_id, channel_type, conversation_id, conversation_external_id, conversation_kind, parent_conversation_id, source_message_id, thread_root_message_id, attributes (≥1 entry)
-- [ ] `proto/channels.yaml` parses and `zoho_cliq` is `status: active`
+- [ ] Round-trip test exercises **all** of: tenant_id, account_id, channel_type, conversation_id, conversation_external_id, conversation_kind, parent_conversation_id, source_message_id, thread_root_message_id, attributes (≥1 entry), `received_at` as `google.protobuf.Timestamp`
+- [ ] Round-trip test exercises **every reserved-field gap** — sends a message with unknown field 17 and 18 set; both decoders preserve/ignore without erroring (research Q9)
+- [ ] Every enum in `enums.proto` and `attachment.proto` has `*_UNSPECIFIED = 0` as the first value (grep-verified)
+- [ ] `proto/channels.yaml` parses and `zoho_cliq` is `status: active`; `deprecated_aliases` key present (even if empty)
+- [ ] `CONTRIBUTING.md` documents the `attributes` promotion rule and the `channel_type` registry/alias rule
+- [ ] Subject-token validator rejects any token with a dot (unit-tested in the round-trip tool)
+- [ ] Protobuf library versions are pinned in `tools/proto-roundtrip/go.mod` and `requirements.txt` (no `latest`, no unbounded ranges)
 
 ## Risks
 
-- **Field name churn** — wire format is by number, but generated code uses names. Pick clear names first try.
-- **`channel_type` typos** — registry YAML + CI lint guards against drift across SDK/adapter.
-- **`attributes` land-grab** — without discipline, channel-specific data leaks into core. Code-review rule: any `attributes[...]` read by ≥2 callers gets promoted to a typed proto field with backfill.
-- **`conversation_kind` drift between adapters** — generate constants in both Go and Python from one proto file (already covered by `buf generate`).
-- **Timestamp library mismatch** — pin `google.golang.org/protobuf` and `protobuf` (Python) versions; document in `tools/proto-roundtrip/go.mod`.
+- **Field name churn** — wire format is by number, but generated code uses names AND the GCS-sink JSON keys are by name. Mitigation: `WIRE_JSON` ruleset on `buf breaking` blocks rename PRs (research Q10).
+- **`channel_type` typos** — registry YAML + CI lint guards against drift across SDK/adapter. Renames flow through `deprecated_aliases` (research Q3 / goclaw migration 58).
+- **`attributes` land-grab** — without discipline, channel-specific data leaks into core. Mitigation: promotion rule in `CONTRIBUTING.md` (≥2 consumers/channels → typed field), constants-not-literals convention, periodic audit at P5 (research Q4 / Risk 1 in research report).
+- **`conversation_kind` drift between adapters** — generate constants in both Go and Python from one proto file (already covered by `buf generate`). Adapter rejects unknown platform conversation types (returns 4xx) instead of silently mapping to UNSPECIFIED (research Risk 4).
+- **Timestamp library skew between Go and Python** — pin `google.golang.org/protobuf` (single stable v1.x) and `protobuf>=4.27.0,<5.0.0` (Python). Round-trip test catches JSON-serialization divergence early (research Q7 / Risk 2).
+- **Subject-token poisoning from user-supplied IDs** — workspace names or external IDs containing dots would split NATS subject tokens. Mitigation: validation regex at SDK publish-time and at gateway intake; reject rather than sanitize (research Q8 / Risk 3). Account-lookup cache is P3's concern, not P1's.
+- **Idempotency-key shape regrets** — `(channel_type, source_message_id)` looks tempting; it collides for tenants running two workspaces of the same platform. P1 locks the proto in the right shape (`account_id` on Message field 4, `source_message_id` on field 10) so P3's DB schema can drop the unique index without retrofit (research Q6 / goclaw migration 27).
+- **Reserved-field reclamation** — a future contributor could "free up" field 17 or 18 not knowing they're earmarked. Mitigation: explicit `reserved 17; reserved 18;` lines in `message.proto` (and `reserved 15;` in `send_command.proto`) plus a comment block linking to P5/P6 (research Q9 / goclaw migration 59).
 
 ## Out (deferred — not foundation-blocking)
 
@@ -221,6 +249,19 @@ deprecated_aliases: {}   # e.g. zalo_oauth: zalo_oa
 - Cross-channel identity merge (`user_id` resolution) — happens in MIU, not here.
 - Compaction `is_summary` flag — reserve field 18 in `Message`.
 - Federation / event-sourcing — explicitly out per architecture doc §11.
+
+## Research backing
+
+[`plans/reports/research-260508-1056-p1-proto-envelope-design.md`](../../reports/research-260508-1056-p1-proto-envelope-design.md)
+
+Validated against industry conventions (Slack/Discord/Mattermost/Sendbird/Matrix surveys + Google protobuf style guide + Buf rules + goclaw migration scars). Notable:
+
+- `buf breaking` rule: use **`WIRE_JSON`** (not just `WIRE`). Catches field renames that would break the JSON-encoded archive in GCS sink (P6) and BigQuery external tables (P8). NDJSON consumers care about field names.
+- Enum `UNSPECIFIED=0` idiom is standard; Go-generated enums must reject 0 on validation paths.
+- `attributes map<string,string>` is the right escape hatch (vs `Any`/`Struct`/JSON-`bytes`/`oneof`). Promotion rule (≥2 channels read same key → typed field) goes into `CONTRIBUTING.md`.
+- Idempotency `(account_id, source_message_id)` confirmed against goclaw migration 27 scar (which used `(channel_type, source_id)` and broke on dual-workspace tenants).
+- `Sender` embedded (no `user_id` resolution on the wire) confirmed; cross-channel identity merge is a MIU concern.
+- 7 `ConversationKind` values cover all 7 surveyed platforms; `BROADCAST` validated against Telegram channels.
 
 Reserved field numbers (write `reserved 17;` etc. into the proto so they
 can't be reclaimed by accident):
