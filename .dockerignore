@@ -4,8 +4,10 @@
 # Local data volumes (never in build context)
 appdata/
 
-# Generated proto output (rebuilt during image build if needed)
+# Generated proto output — Go bindings needed for Go service images.
+# Python bindings excluded (not needed in Go service images).
 proto/gen/
+!proto/gen/go/
 
 # Local-only areas
 playground/

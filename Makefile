@@ -1,4 +1,4 @@
-.PHONY: help up down proto proto-gen proto-lint proto-breaking proto-roundtrip sdk-go-test sdk-py-test lint test clean gateway-build gateway-build-local
+.PHONY: help up down proto proto-gen proto-lint proto-breaking proto-roundtrip sdk-go-test sdk-py-test sink-gcs-test sink-gcs-build-local sink-gcs-build lint test clean gateway-build gateway-build-local gateway-test gateway-migrate
 
 COMPOSE := docker compose -f deploy/docker-compose.yml
 BUILD_VERSION := $(shell git describe --always --dirty 2>/dev/null || echo dev)
@@ -56,3 +56,20 @@ gateway-build: ## Build gateway Docker image with version tag (no push)
 	docker build -f gateway/Dockerfile \
 		--build-arg BUILD_VERSION=$(BUILD_VERSION) \
 		-t mio/gateway:$(BUILD_VERSION) .
+
+gateway-test: ## Run gateway unit tests (no live NATS/Postgres needed)
+	cd gateway && go test ./internal/... -v -count=1
+
+gateway-migrate: ## Run database migrations manually via gateway CLI
+	cd gateway && MIO_MIGRATE_ON_START=true go run ./cmd/gateway/
+
+sink-gcs-test: ## Run sink-gcs unit tests (no live NATS/MinIO needed)
+	cd sink-gcs && go test ./internal/... -v
+
+sink-gcs-build-local: ## Build sink-gcs Docker image locally (no push)
+	docker build -f sink-gcs/Dockerfile -t mio/sink-gcs:dev .
+
+sink-gcs-build: ## Build sink-gcs Docker image with version tag (no push)
+	docker build -f sink-gcs/Dockerfile \
+		--build-arg BUILD_VERSION=$(BUILD_VERSION) \
+		-t mio/sink-gcs:$(BUILD_VERSION) .
