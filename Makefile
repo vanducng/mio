@@ -1,4 +1,4 @@
-.PHONY: help up down proto proto-lint proto-breaking proto-roundtrip lint test clean gateway-build gateway-build-local
+.PHONY: help up down proto proto-gen proto-lint proto-breaking proto-roundtrip sdk-go-test sdk-py-test lint test clean gateway-build gateway-build-local
 
 COMPOSE := docker compose -f deploy/docker-compose.yml
 BUILD_VERSION := $(shell git describe --always --dirty 2>/dev/null || echo dev)
@@ -15,6 +15,18 @@ down: ## Stop local infra
 
 proto: ## Run buf generate (outputs to proto/gen/)
 	buf generate
+
+proto-gen: proto ## Regenerate proto + channel-type codegen; CI diffs must be clean
+	go run ./tools/genchanneltypes/
+	@echo "==> Checking for codegen drift..."
+	git diff --exit-code sdk-go/channeltypes.go sdk-py/mio/channeltypes.py || \
+		(echo "ERROR: channeltypes drift detected — commit the generated files"; exit 1)
+
+sdk-go-test: ## Run sdk-go unit tests (no live NATS needed)
+	cd sdk-go && go test ./... -v
+
+sdk-py-test: ## Run sdk-py unit tests (no live NATS needed)
+	cd sdk-py && uv run pytest tests/ -v -m "not integration"
 
 proto-lint: ## Run buf lint (STANDARD ruleset)
 	buf lint
