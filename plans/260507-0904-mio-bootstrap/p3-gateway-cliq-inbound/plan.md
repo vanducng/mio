@@ -313,8 +313,13 @@ these, `ConversationKind` mapping and the deadline budget are guesswork.
     4. `EnsureConversation` (FK requires it before message).
     5. `EnsureUniqueMessage` → returns `(id, fresh)`.
     6. If `fresh`: `sdk.PublishInbound(ctx, msg)` — schema-version
-       enforced inside SDK (P2). Subject:
-       `mio.inbound.zoho_cliq.<account_id>.<conversation_id>.<message_id>`.
+       enforced inside SDK (P2). Subject is 4-token for inbound:
+       `mio.inbound.zoho_cliq.<account_id>.<conversation_id>` (the
+       optional `.<message_id>` 5th token is **outbound-only**, used
+       for edit/delete commands per arch-doc §5 and P2's
+       `subjects.Outbound(...)` signature). The SDK's
+       `subjects.Inbound(channelType, accountID, conversationID)` builds
+       this; the gateway never hand-builds the subject.
     7. Ack Cliq: `200` with body shape from Step 0 §6.
     8. (Outside the deadline-critical path) any non-essential writes; OTel
        root span ends here.
@@ -366,7 +371,7 @@ these, `ConversationKind` mapping and the deadline budget are guesswork.
 ## Success Criteria
 
 - [ ] **Step 0 artifacts exist:** ≥6 fixture files in `playground/cliq/captures/` covering DM, public channel, private channel, thread reply, system message, attachment; `FINDINGS.md` answers all 6 open questions
-- [ ] Captured Cliq payload → one `mio.v1.Message` on `MESSAGES_INBOUND` with subject matching `mio.inbound.zoho_cliq.<account_id>.<conversation_id>.<message_id>`
+- [ ] Captured Cliq payload → one `mio.v1.Message` on `MESSAGES_INBOUND` with subject matching `mio.inbound.zoho_cliq.<account_id>.<conversation_id>` (4 tokens; **no message_id segment** for inbound — that 5th segment is outbound-only per arch-doc §5 + P2 SDK)
 - [ ] Published message has non-zero `tenant_id`, `account_id`, `conversation_id`, `conversation_external_id`, `conversation_kind`, `source_message_id`, `sender.external_id`
 - [ ] DM fixture sets `conversation_kind=DM`; public-channel fixture sets `CHANNEL_PUBLIC`; private-channel fixture sets `CHANNEL_PRIVATE`; thread fixture sets `THREAD` with non-null `parent_external_id`
 - [ ] Signature mismatch → 401 + `mio_gateway_inbound_total{channel_type="zoho_cliq",outcome="bad_signature"}` increments

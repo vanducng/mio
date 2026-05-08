@@ -92,8 +92,12 @@ from mio.gen.mio.v1 import Message, SendCommand
 NATS_URL = os.environ["NATS_URL"]
 
 async def handle(msg: Message, client: mio.Client) -> SendCommand:
-    # No schema check here — sdk-py Verify (P2) rejects bad versions before
-    # the message reaches handle(). Keep this function pure.
+    # No schema check here. P2 contract: SDK Verify is publish-side only.
+    # The consume side intentionally tolerates forward-compatible additions,
+    # so a v2 message *can* reach handle() — that's the asymmetry. We keep
+    # this function pure and let the publisher (gateway) be the gate.
+    # Defense-in-depth consume-side Verify is a P5 concern (gateway as
+    # outbound consumer), not P4.
     cmd = SendCommand(
         id=str(ULID()),                     # idempotency address: out:<id>
         schema_version=1,
@@ -191,14 +195,14 @@ Notes:
 - [ ] When inbound has `thread_root_message_id` set, outbound `SendCommand.thread_root_message_id` equals it (reply-in-thread preserved); otherwise fall back to `source_message_id` so a fresh thread roots cleanly
 - [ ] Replay same inbound 5× → 5 outbound `SendCommand`s (each has a fresh `id`; gateway sender will handle outbound dedup separately at the platform level)
 - [ ] Killing the consumer mid-flight → message redelivered after `ack_wait=30s`
-- [ ] Schema-version mismatch (set `schema_version=2` in a hand-crafted publish) → SDK Verify rejects before `handle()` is called (handler stays clean)
+- [ ] Schema-version mismatch on **publish** (set `schema_version=2` and call `client.publish_inbound`) → SDK `Verify` raises `ValueError` at the publisher; nothing reaches the stream; `handle()` is never called. (Consume-side does NOT validate per P2 asymmetry — a v2 message bypassed via raw `js.publish` would reach `handle()` untouched; that path is intentional, not a regression.)
 - [ ] **SIGTERM produces clean shutdown ≤6s** (one 5s fetch tick + ack drain) — `docker compose kill -s SIGTERM` exits container; no `docker kill -9` needed
 - [ ] **SDK closes pull subscription on iterator exit** — logs show `consumer closed durable=ai-consumer`; `nats consumer info MESSAGES_INBOUND ai-consumer` reports the durable still exists (durable is intentional) but no leaked ephemeral state from this consumer instance
 - [ ] **Backpressure metric visible during burst** — replay 100 messages in <1s; `mio_consumer_pending` gauge peaks (visible via `/metrics`) then drains to 0 within 5s
 
 ## Risks
 
-- **Schema-version mismatch** — `sdk-py` Verify guards on consume; fail fast on unknown major. Handler stays clean (no schema check in `handle()`).
+- **Schema-version mismatch** — guarded on **publish** only (P2 asymmetry: SDK Verify rejects unknown major at the producer; consume side intentionally passes through to allow forward-compatible additions). The echo handler is pure on purpose; `handle()` does no schema check. Defense-in-depth consume-side Verify is P5's job (gateway as outbound consumer), not P4's.
 - **Async-iter shutdown hang** — a naive `async for delivery in sub.messages` with no internal timeout would hang on SIGTERM until the next message arrives. **Mitigated** at the SDK level: P2's `consume_inbound()` runs an internal 5s pull-fetch loop, so the iterator yields control every ~5s and `stop.is_set()` checks fire promptly.
 - **Subscription leak on container restart** — without clean iterator shutdown, ephemeral pull state could leak. **Mitigated** by P2 contract: the iterator's `aclose()` (triggered by `break`/cancel/exit) closes the pull subscription. Durable consumer (`ai-consumer`) is intentionally persistent — that's the point of a durable.
 - **Consumer config drift on redeploy** — `js.add_consumer()` is idempotent only when config matches; changing `MaxAckPending` or `ack_wait` makes NATS reject creation. **Mitigated** for P4 via manual reconciliation (`nats consumer del MESSAGES_INBOUND ai-consumer --force`); **P7** introduces a bootstrap Job that owns reconciliation.
@@ -221,7 +225,7 @@ Findings folded into Steps / skeleton / Risks above:
 - **`fetch(timeout=5)` loop** chosen over `async for delivery` for clean SIGTERM behavior.
 - **Signal handlers registered before subscription opens.**
 - **Explicit `unsubscribe()` in `finally`** to avoid server-side state leak on container restart.
-- **Schema rejection stays in SDK Verify (P2)** — handler is pure.
+- **Schema rejection lives on the publish side of SDK Verify (P2 publish-only contract)** — handler is pure; consume side does not Verify.
 - **Backpressure metric** `mio_consumer_pending` emitted by SDK; alert threshold `> 10 for >30s`.
 - **Consumer config drift** mitigated manually for P4; automated reconciliation deferred to P7.
 - **Poison-pill `term()` policy** deferred to P5 along with DLQ design.

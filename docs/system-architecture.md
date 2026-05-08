@@ -102,7 +102,7 @@ sequenceDiagram
   Ch->>GW: POST /webhooks/{channel} (signed)
   GW->>GW: verify HMAC signature
   GW->>GW: normalize → mio.v1.Message
-  GW->>DB: INSERT (channel, source_message_id) ON CONFLICT DO NOTHING
+  GW->>DB: INSERT (account_id, source_message_id) ON CONFLICT DO NOTHING
   alt duplicate
     DB-->>GW: 0 rows
     GW-->>Ch: 200 OK (silently dedup)
@@ -228,8 +228,10 @@ Two layers, defense in depth:
 
 1. **NATS publish dedup** via `Nats-Msg-Id` header inside the stream's
    `duplicate_window` (2 min). Catches retries from the gateway itself.
-2. **Postgres unique constraint** on `(channel, source_message_id)`.
+2. **Postgres unique constraint** on `(account_id, source_message_id)`.
    Authoritative. Catches channel-level redeliveries past the dedup window.
+   `account_id` (not `channel_type`) so one tenant running two installs of
+   the same platform — e.g. two Slack workspaces — gets disjoint dedup keys.
 
 The gateway's loop is: signature verify → upsert → publish → ack. If
 the upsert returns "already exists," we silently 200 the channel and
@@ -240,15 +242,18 @@ skip the publish.
 The bus does not order across subjects. We enforce ordering by:
 
 - **Per-stream**: NATS gives FIFO within a stream
-- **Per-thread**: `MaxAckPending=1` on `ai-consumer` makes the consumer
+- **Per-conversation**: `MaxAckPending=1` on `ai-consumer` makes the consumer
   effectively single-flight. Slow but correct
 - **Graduation path**: once we need throughput, partition by subject —
-  one consumer per `thread_id` shard. Documented but not built
+  one consumer per `mio.inbound.<channel_type>.<account_id>.<conversation_id>`
+  shard. Documented but not built
 
 ### Rate limits
 
-Per-workspace token buckets, sized per channel API. Lives in the
-gateway sender-pool, not the bus. Examples:
+Per-`account_id` token buckets (one bucket per channel install), sized
+per channel API. Lives in the gateway sender-pool, not the bus. Adapters
+may override the bucket key (e.g. Slack tier-4 uses
+`account_id:conversation_external_id` for per-channel fairness). Examples:
 
 | Channel | Limit | Source |
 |---|---|---|
@@ -271,7 +276,9 @@ Two lifetimes, two access patterns, never shared.
 | Bus | NATS JetStream | 7d (in) / 23h (out) | streaming, replayable | MIO |
 | Archive | GCS + BigQuery external tables | indefinite (lifecycle to Coldline) | analytical, batch | MIO |
 
-GCS partitioning: `gs://mio-messages/channel=<channel>/date=YYYY-MM-DD/`.
+GCS partitioning: `gs://mio-messages/channel_type=<channel_type>/date=YYYY-MM-DD/`
+(Hive-style for BQ external table partition discovery; `channel_type` value
+is the `proto/channels.yaml` registry slug — e.g. `zoho_cliq`, `slack`).
 Lifecycle: Standard → Nearline @ 30d → Coldline @ 90d. BigQuery external
 tables read directly from GCS — no separate BQ sink, no double-write.
 
@@ -289,9 +296,9 @@ flowchart TB
       gwd["mio-gateway<br/>Deployment, 2 replicas"]
       sinkd["mio-sink-gcs<br/>Deployment, 1 replica"]
       subgraph "StatefulSet: mio-nats (3 replicas)"
-        n0["nats-0<br/>zone-a · pd-ssd"]
-        n1["nats-1<br/>zone-b · pd-ssd"]
-        n2["nats-2<br/>zone-c · pd-ssd"]
+        n0["nats-0<br/>zone-a · pd-balanced"]
+        n1["nats-1<br/>zone-b · pd-balanced"]
+        n2["nats-2<br/>zone-c · pd-balanced"]
       end
       promex[Prometheus exporter]
     end
@@ -332,13 +339,20 @@ the whole loop.
 
 ### Key metrics
 
+Label discipline (cross-phase invariant): the only allowed application-metric
+labels are `channel_type`, `direction`, `outcome`. Adding `account_id`,
+`tenant_id`, `conversation_id`, `message_id`, or any free-form string is
+forbidden — they are cardinality bombs. Phase-specific bounded extras
+(`http_status` bucketed `2xx/4xx/429/5xx/network`, `reason` bounded enum)
+are acceptable; see P5.
+
 | Metric | Owner | Why |
 |---|---|---|
-| `mio_gateway_inbound_latency_seconds{channel,outcome}` | gateway | p99 < 500ms SLO |
-| `mio_gateway_outbound_send_total{channel,workspace,outcome}` | gateway | rate-limit hits, channel errors |
+| `mio_gateway_inbound_latency_seconds{channel_type,direction,outcome}` | gateway | p99 < 500ms SLO |
+| `mio_gateway_outbound_send_total{channel_type,direction,outcome}` | gateway | rate-limit hits, channel errors |
 | `mio_jetstream_consumer_lag{stream,consumer}` | NATS exporter | AI consumer falling behind |
-| `mio_sink_gcs_bytes_written_total{channel}` | sink-gcs | archive throughput |
-| `mio_idempotency_dedup_total{channel}` | gateway | redelivery rate sanity |
+| `mio_sink_gcs_bytes_written_total{channel_type}` | sink-gcs | archive throughput |
+| `mio_idempotency_dedup_total{channel_type}` | gateway | redelivery rate sanity |
 
 ---
 

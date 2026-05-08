@@ -32,7 +32,7 @@ adding a channel = new entry in YAML + new package under
 
 - **Create:**
   - `gateway/internal/sender/pool.go` — pull-fetch loop, worker pool sized via env; graceful shutdown drain
-  - `gateway/internal/sender/dispatch.go` — registry-backed `channel_type` → adapter; **zero adapter-specific branches** (P9 litmus); lookup table populated by adapter `init()` blocks
+  - `gateway/internal/sender/dispatch.go` — defines `type Dispatcher struct { byChannel map[string]Adapter }` with `func New(adapters []Adapter) *Dispatcher` (panics on duplicate `ChannelType()` slug) and `func (d *Dispatcher) ForCommand(cmd *miov1.SendCommand) Adapter` (returns adapter for `cmd.ChannelType`; nil → 4xx terminate). **Zero adapter-specific branches** (P9 litmus); lookup table populated from `sender.RegisteredAdapters()` at `main.go` startup, after every adapter package's `init()` has run.
   - `gateway/internal/sender/adapter.go` — minimal `Adapter` interface (Send, Edit, ChannelType, MaxDeliver, RateLimitKey)
   - `gateway/internal/sender/registry.go` — mutex-protected global `registerAdapter(Adapter)` called from each channel package's `init()`
   - `gateway/internal/channels/zohocliq/init.go` — package-local `init()` that constructs the Cliq adapter and calls `sender.RegisterAdapter(...)` (the litmus surface — P9 mirrors this for Slack)
@@ -135,7 +135,7 @@ Alert rule: `buckets_active > 10× active_account_count` for 5min → eviction g
 
 1. **Adapter self-registration**. Each channel package (`gateway/internal/channels/zohocliq/init.go`, later `.../slack/init.go`) carries an `init()` block that builds an adapter from env config and calls `sender.RegisterAdapter(...)`. `main.go` only blank-imports the package: `_ "mio/gateway/internal/channels/zohocliq"`. After all `init()` blocks finish, `dispatch.New(sender.RegisteredAdapters())` builds the `map[channel_type]Adapter`. **`dispatch.go` has zero adapter-specific branches** — this is the P9 zero-edit litmus.
 
-2. **Sender pool boots**. `sender.Pool` opens a pull subscription on the `sender-pool` durable consumer (`MaxAckPending=32`, `ack_wait=30s`, on `MESSAGES_OUTBOUND`; consumer provisioned at gateway startup, authoritative source). Worker count comes from env (`MIO_SENDER_WORKERS`, default 8). Each worker fetches a batch, dispatches per message via `dispatcher.ForCommand(cmd).Send/Edit`.
+2. **Sender pool boots**. `main.go` builds `dispatcher := sender.New(sender.RegisteredAdapters())` once after all adapter `init()`s have run, then constructs `pool := sender.NewPool(dispatcher, ...)`. `sender.Pool` opens a pull subscription on the `sender-pool` durable consumer (`MaxAckPending=32`, `ack_wait=30s`, on `MESSAGES_OUTBOUND`; consumer provisioned at gateway startup, authoritative source). Worker count comes from env (`MIO_SENDER_WORKERS`, default 8). Each worker fetches a batch and calls `dispatcher.ForCommand(cmd).Send(...)` or `.Edit(...)` per message; an unregistered `channel_type` returns nil → message is `Term`'d with `reason="other"`.
 
 3. **Rate-limit gate** (per command, before HTTP call):
    - `key := adapter.RateLimitKey(cmd); if key == "" { key = cmd.AccountId }`.

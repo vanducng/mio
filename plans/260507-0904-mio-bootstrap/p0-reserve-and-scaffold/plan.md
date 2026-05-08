@@ -52,18 +52,33 @@ up NATS + Postgres + MinIO locally.
    - `minio/minio:latest`, command `server /data --console-address :9001`, ports `${MINIO_API_PORT:-9000}:9000` + `${MINIO_CONSOLE_PORT:-9001}:9001`, env `MINIO_ROOT_USER=minioadmin` / `MINIO_ROOT_PASSWORD=minioadmin`, volume `./appdata/minio:/data`, healthcheck `curl -f http://localhost:9000/minio/health/live`, `restart: unless-stopped`.
    - No `depends_on: service_healthy` wiring yet — gateway/echo-consumer hook those in P3/P4. (Cross-phase: gateway startup is authoritative for stream/consumer provisioning; bootstrap Job in P7 is verification-only.)
 6. **Write `.env.example`** with default ports + a comment block documenting the override pattern (Postgres 5432 collision is the most common; nudge devs to `cp .env.example .env.local && export $(cat .env.local)`).
-7. **Write `deploy/postgres/init.sql`** — bootstrap only, idempotent:
+7. **Write `deploy/postgres/init.sql`** — comment-only placeholder; the
+   `postgres:16-alpine` entrypoint creates the role + database from the
+   `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` env vars **before**
+   running anything in `/docker-entrypoint-initdb.d/`. A `CREATE ROLE mio_app`
+   here would error (`role "mio_app" already exists`) and break first cold
+   boot — Postgres has no `CREATE ROLE IF NOT EXISTS` syntax.
    ```sql
-   -- P0 bootstrap. Schema migrations are owned by gateway/migrations/ from P3.
+   -- P0 bootstrap. Role + database are created by the postgres entrypoint
+   -- from POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB. Do NOT add
+   -- CREATE ROLE / CREATE DATABASE here — they will fail on cold boot.
+   --
+   -- Schema migrations are owned by gateway/migrations/ from P3.
    -- Foundation invariants (enforced by P3 migrations, not here):
    --   - tenant_id, account_id NOT NULL from row 1
    --   - idempotency address: (account_id, source_message_id)
-   CREATE ROLE mio_app WITH LOGIN PASSWORD 'dev_password';
-   CREATE DATABASE mio OWNER mio_app;
+   --
+   -- If future setup needs an extension or a second role, wrap in a
+   -- DO $$ BEGIN ... EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+   -- block so re-runs against an already-initialized volume stay clean.
    ```
-   No tables. Putting schema here forces a `appdata/postgres/` wipe on every migration change.
+   No tables, no role, no DB statements. Putting schema here forces a
+   `appdata/postgres/` wipe on every migration change.
 8. **Write `.editorconfig`** — `root=true`; `[*]` utf-8 + lf + final-newline + trim-trailing; `[*.{go,proto}]` tab indent_size 4; `[*.py]` space 4; `[*.{yml,yaml}]` space 2; `[*.md]` `trim_trailing_whitespace=false`.
-9. **Write `.mise.toml`** (toolchain pin only; tasks delegate to Makefile):
+9. **Write `.mise.toml`** (toolchain pin only; tasks delegate to Makefile).
+   Use proper TOML section headers for tasks — `[tasks.up] = { ... }` is
+   invalid TOML (table headers cannot have an `=` after them) and mise
+   refuses to parse the file:
    ```toml
    [tools]
    go = "1.23"
@@ -75,11 +90,21 @@ up NATS + Postgres + MinIO locally.
    MIO_TENANT_ID = "tenant-dev"
    _.file = ".env.local"   # auto-loads .env.local if present (gitignored)
 
-   [tasks.up]    = { run = "make up", description = "Start local infra" }
-   [tasks.down]  = { run = "make down" }
-   [tasks.proto] = { run = "make proto" }
-   [tasks.lint]  = { run = "make lint" }
-   [tasks.test]  = { run = "make test" }
+   [tasks.up]
+   run = "make up"
+   description = "Start local infra"
+
+   [tasks.down]
+   run = "make down"
+
+   [tasks.proto]
+   run = "make proto"
+
+   [tasks.lint]
+   run = "make lint"
+
+   [tasks.test]
+   run = "make test"
    ```
    Single source of truth for tool versions across macOS dev + linux CI; `mise install` reproduces the toolchain. Tasks are thin wrappers — Makefile stays canonical. (Research Section 1: mise wins over asdf/devbox on cross-platform parity, GHA support via `jdx/mise-action@v2`, and zero lock-in — `.tool-versions` migration path back to asdf in 5 min.)
 10. **Write `.dockerignore`** at repo root — excludes `.git`, `appdata/`, `proto/gen/`, `playground/`, `plans/`, `docs/`, `.env*` (except `.env.example`), `__pycache__`, `.venv`, `node_modules`, `*.pyc`, `.pytest_cache/`, `.idea/`, `.vscode/`. Keeps build context small for P3 `gateway/Dockerfile` and P6 `sink-gcs/Dockerfile`.

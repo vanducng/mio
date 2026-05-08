@@ -38,9 +38,8 @@ on consume) passes both Go and Python sides.
   - `proto/mio/v1/send_command.proto` — outbound envelope
   - `proto/channels.yaml` — `channel_type` registry (single source of truth, read by SDK + CI)
   - `proto/buf.lock` (auto by `buf dep update`)
-  - `tools/proto-roundtrip/main.go` (smoke test, throwaway location)
-  - `tools/proto-roundtrip/go.mod` (pins `google.golang.org/protobuf` to a stable v1.x)
-  - `tools/proto-roundtrip/requirements.txt` (pins `protobuf>=4.27.0,<5.0.0` for the Python half)
+  - `tools/proto-roundtrip/main.go` — Go half, **lives in the root module** (no separate `go.mod`); imports `github.com/vanducng/mio/proto/gen/go/mio/v1`. Pin `google.golang.org/protobuf` to a stable v1.x in the **root** `go.mod` so gateway + SDK + tool share one version. (A separate `tools/proto-roundtrip/go.mod` would need a `replace` directive to see generated proto types, and CI doesn't carry the gitignored `go.work` — keep it simple.)
+  - `tools/proto-roundtrip/roundtrip.py` — Python half, run via `uv run` against `sdk-py`'s pinned `protobuf` (range `>=4.27.0,<5.0.0`). No separate `requirements.txt`; reuse the `sdk-py` pinning.
   - `CONTRIBUTING.md` — short doc with the `attributes` promotion rule + `channel_type` registry rule (research Q4, Q3)
 
 Not creating `channel.proto` or `user.proto` as separate messages — channel
@@ -207,8 +206,8 @@ deprecated_aliases: {}   # e.g. zalo_oauth: zalo_oa
    - [ ] Manual grep: every `enum` block has a `*_UNSPECIFIED = 0` first value.
 5. **Generate code**: `buf generate` produces `proto/gen/go/mio/v1/` and `proto/gen/py/mio/v1/`. Both must build/import without errors.
 6. **Pin protobuf library versions** (research Q7 — prevents Go/Python JSON-serialization skew that bit goclaw):
-   - [ ] `tools/proto-roundtrip/go.mod` pins `google.golang.org/protobuf` to a single stable v1.x.
-   - [ ] `tools/proto-roundtrip/requirements.txt` pins `protobuf>=4.27.0,<5.0.0`.
+   - [ ] **Root `go.mod`** pins `google.golang.org/protobuf` to a single stable v1.x (one version across gateway, SDK, tool — the round-trip tool is a `package main` under the root module, no separate `go.mod`).
+   - [ ] **`sdk-py/pyproject.toml`** declares `protobuf>=4.27.0,<5.0.0`; the Python round-trip script (`tools/proto-roundtrip/roundtrip.py`) runs via `uv run` against that lockfile.
 7. **Write `tools/proto-roundtrip/main.go`**: connect to local NATS, publish a populated `Message{}` (non-zero `tenant_id`, `account_id`, `channel_type="zoho_cliq"`, `conversation_id`, `conversation_external_id`, `conversation_kind=DM`, `parent_conversation_id`, `source_message_id`, `thread_root_message_id`, `sender`, `received_at`, `attributes` with ≥1 entry), subscribe ephemeral, decode in **both Go and Python**, assert field-by-field equality. Round-trip must also exercise each `reserved` field gap (parse a hand-crafted message that sets unknown field 17 → ensure decoder doesn't blow up). Print `OK`.
 8. **Add subject-token validation helper** in the round-trip tool: regex `^[a-zA-Z0-9_-]+$` on every token of `mio.<dir>.<channel_type>.<account_id>.<conversation_id>` before publish (research Q8). Reject dots in any token. This helper is the seed for the SDK's publish-time validator in P2.
 9. **Write `CONTRIBUTING.md`** with two short sections (research Q4, Q3):
@@ -230,7 +229,7 @@ deprecated_aliases: {}   # e.g. zalo_oauth: zalo_oa
 - [ ] `proto/channels.yaml` parses and `zoho_cliq` is `status: active`; `deprecated_aliases` key present (even if empty)
 - [ ] `CONTRIBUTING.md` documents the `attributes` promotion rule and the `channel_type` registry/alias rule
 - [ ] Subject-token validator rejects any token with a dot (unit-tested in the round-trip tool)
-- [ ] Protobuf library versions are pinned in `tools/proto-roundtrip/go.mod` and `requirements.txt` (no `latest`, no unbounded ranges)
+- [ ] Protobuf library versions are pinned in the root `go.mod` and in `sdk-py/pyproject.toml` (no `latest`, no unbounded ranges); `tools/proto-roundtrip/` carries no separate `go.mod` / `requirements.txt`
 
 ## Risks
 
