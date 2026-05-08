@@ -7,8 +7,9 @@ import (
 	"testing"
 )
 
-// fixtureDir points to the Step 0 captures used as test fixtures.
-const fixtureDir = "../../../../playground/cliq/captures"
+// fixtureDir points to PII-scrubbed copies of the Step 0 captures (originals
+// live in playground/cliq/captures/ which is gitignored).
+const fixtureDir = "testdata"
 
 func TestNormalize_ChannelText(t *testing.T) {
 	body := loadFixture(t, "2026-05-03T10-38-07-channel-text.json")
