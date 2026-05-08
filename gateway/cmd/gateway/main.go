@@ -1,6 +1,7 @@
 // Command gateway is the mio-gateway HTTP server.
 // It receives channel webhooks, normalises payloads to mio.v1.Message,
-// and publishes to MESSAGES_INBOUND via NATS JetStream.
+// publishes to MESSAGES_INBOUND, and drains MESSAGES_OUTBOUND via the
+// sender pool which dispatches to per-channel adapters.
 package main
 
 import (
@@ -18,8 +19,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	sdk "github.com/vanducng/mio/sdk-go"
 	"github.com/vanducng/mio/gateway/internal/config"
+	"github.com/vanducng/mio/gateway/internal/ratelimit"
+	"github.com/vanducng/mio/gateway/internal/sender"
 	"github.com/vanducng/mio/gateway/internal/server"
 	"github.com/vanducng/mio/gateway/internal/store"
+
+	// Blank-import each channel package to trigger its init() which calls
+	// sender.RegisterAdapter(). P9: add _ "…/channels/slack" here only.
+	_ "github.com/vanducng/mio/gateway/internal/channels/zohocliq"
 )
 
 // version is injected at build time via -ldflags="-X main.version=<ver>".
@@ -67,7 +74,6 @@ func run(logger *slog.Logger) error {
 	// ── 4. NATS connection ─────────────────────────────────────────────────
 	natsURL := cfg.NatsURLs[0]
 	if len(cfg.NatsURLs) > 1 {
-		// nats.Connect accepts comma-joined URLs for cluster failover.
 		natsURL = ""
 		for i, u := range cfg.NatsURLs {
 			if i > 0 {
@@ -78,7 +84,7 @@ func run(logger *slog.Logger) error {
 	}
 	nc, err := nats.Connect(natsURL,
 		nats.Name("mio-gateway/"+version),
-		nats.MaxReconnects(-1), // reconnect forever
+		nats.MaxReconnects(-1),
 		nats.ReconnectWait(2*time.Second),
 	)
 	if err != nil {
@@ -87,16 +93,19 @@ func run(logger *slog.Logger) error {
 	defer nc.Drain() //nolint:errcheck
 	logger.Info("nats: connected", "url", natsURL)
 
-	// ── 5. JetStream stream provisioning (gateway-authoritative) ──────────
+	// ── 5. JetStream stream + consumer provisioning ────────────────────────
 	js, err := jetstream.New(nc)
 	if err != nil {
 		return fmt.Errorf("nats: jetstream: %w", err)
 	}
-	natsReplicas := 1 // 1 locally; P7 bumps to 3 in cluster
+	natsReplicas := 1
 	if err := store.EnsureStreams(ctx, js, natsReplicas); err != nil {
 		return fmt.Errorf("jetstream: ensure streams: %w", err)
 	}
-	logger.Info("jetstream: streams provisioned",
+	if err := store.EnsureSenderConsumer(ctx, js); err != nil {
+		return fmt.Errorf("jetstream: ensure sender-pool consumer: %w", err)
+	}
+	logger.Info("jetstream: streams + consumers provisioned",
 		"inbound", store.StreamInbound,
 		"outbound", store.StreamOutbound)
 
@@ -105,13 +114,48 @@ func run(logger *slog.Logger) error {
 	sdkClient, err := sdk.New(natsURL,
 		sdk.WithName("mio-gateway/sdk/"+version),
 		sdk.WithMetricsRegistry(sdkReg),
+		sdk.WithMaxAckPending(32), // sender pool: higher concurrency than inbound consumer
+		sdk.WithAckWait(30*time.Second),
 	)
 	if err != nil {
 		return fmt.Errorf("sdk: %w", err)
 	}
 	defer sdkClient.Close()
 
-	// ── 7. HTTP server ─────────────────────────────────────────────────────
+	// ── 7. Sender pool ─────────────────────────────────────────────────────
+	// Build dispatcher AFTER all init() blocks have run (Go guarantees this).
+	// Every blank-imported channel package registered its adapter already.
+	dispatcher := sender.New(sender.RegisteredAdapters())
+	logger.Info("sender: dispatcher built",
+		"adapters", len(sender.RegisteredAdapters()))
+
+	// Root context for the sender pool; cancelled on SIGTERM.
+	poolCtx, poolCancel := context.WithCancel(ctx)
+	defer poolCancel()
+
+	rateLimiter := ratelimit.New(poolCtx, prometheus.DefaultRegisterer, logger)
+	outboundState := store.NewOutboundState()
+
+	senderWorkers := cfg.SenderWorkers
+	pool := sender.NewPool(dispatcher, sdkClient, rateLimiter, outboundState,
+		sender.PoolConfig{
+			Workers:        senderWorkers,
+			StreamOutbound: store.StreamOutbound,
+			Logger:         logger,
+		},
+		prometheus.DefaultRegisterer,
+	)
+
+	poolErrCh := make(chan error, 1)
+	go func() {
+		if err := pool.Start(poolCtx); err != nil {
+			poolErrCh <- err
+		}
+		close(poolErrCh)
+	}()
+	logger.Info("sender: pool started", "workers", senderWorkers)
+
+	// ── 8. HTTP server ─────────────────────────────────────────────────────
 	serverCfg := server.Config{
 		TenantID:          cfg.TenantID,
 		AccountID:         cfg.AccountID,
@@ -129,7 +173,7 @@ func run(logger *slog.Logger) error {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// ── 8. Graceful shutdown ───────────────────────────────────────────────
+	// ── 9. Graceful shutdown ───────────────────────────────────────────────
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
@@ -141,17 +185,31 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
-	<-sigCh
-	logger.Info("gateway: shutting down",
-		"grace_sec", cfg.GracefulShutdownSec)
+	select {
+	case <-sigCh:
+		logger.Info("gateway: SIGTERM received — draining")
+	case err := <-poolErrCh:
+		if err != nil {
+			return fmt.Errorf("sender pool: %w", err)
+		}
+	}
 
-	shutCtx, cancel := context.WithTimeout(context.Background(),
-		time.Duration(cfg.GracefulShutdownSec)*time.Second)
+	// Stop sender pool first — give in-flight workers time to finish.
+	shutdownDrain := time.Duration(cfg.GracefulShutdownSec) * time.Second
+	poolCancel()
+
+	// Shut down HTTP server.
+	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownDrain)
 	defer cancel()
-
 	if err := srv.Shutdown(shutCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}
+
+	// Wait for pool goroutine to exit.
+	if err := <-poolErrCh; err != nil {
+		logger.Warn("sender pool exit error", "err", err)
+	}
+
 	logger.Info("gateway: shutdown complete")
 	return nil
 }

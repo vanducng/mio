@@ -24,6 +24,9 @@ type Config struct {
 	TenantID  string // MIO_TENANT_ID (UUID)
 	AccountID string // MIO_ACCOUNT_ID (UUID)
 
+	// Sender pool
+	SenderWorkers int // MIO_SENDER_WORKERS, default 8
+
 	// NATS
 	NatsURLs []string // MIO_NATS_URLS, comma-separated, default "nats://localhost:4222"
 
@@ -45,6 +48,7 @@ func Load() (*Config, error) {
 		GracefulShutdownSec: envInt("MIO_GRACEFUL_SHUTDOWN_SECS", 15),
 		TenantID:            envStr("MIO_TENANT_ID", ""),
 		AccountID:           envStr("MIO_ACCOUNT_ID", ""),
+		SenderWorkers:       envInt("MIO_SENDER_WORKERS", 8),
 		NatsURLs:            envCSV("MIO_NATS_URLS", "nats://localhost:4222"),
 		PostgresDSN:         envStr("MIO_POSTGRES_DSN", ""),
 		PgxMaxConns:         envInt("MIO_PGX_MAX_CONNS", (runtime.GOMAXPROCS(0)*2)+1),

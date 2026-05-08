@@ -67,3 +67,33 @@ func ensureOutbound(ctx context.Context, js jetstream.JetStream, replicas int) e
 	_, err := js.CreateOrUpdateStream(ctx, cfg)
 	return err
 }
+
+// ConsumerSenderPool is the durable name for the gateway sender-pool consumer.
+const ConsumerSenderPool = "sender-pool"
+
+// EnsureSenderConsumer provisions the durable pull consumer on MESSAGES_OUTBOUND
+// that the sender pool attaches to. Idempotent — safe to call on every boot.
+//
+// Config choices:
+//   - MaxAckPending=32: allows 32 in-flight messages across the worker pool.
+//   - AckWait=30s:       matches sdk.WithAckWait in main.go.
+//   - MaxDeliver=5:      default; adapters may override per-channel via MaxDeliver().
+//   - FilterSubject="":  consume all outbound subjects (mio.outbound.>).
+func EnsureSenderConsumer(ctx context.Context, js jetstream.JetStream) error {
+	cfg := jetstream.ConsumerConfig{
+		Name:          ConsumerSenderPool,
+		Durable:       ConsumerSenderPool,
+		FilterSubject: "",       // all subjects on MESSAGES_OUTBOUND
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		AckWait:       30 * time.Second,
+		MaxAckPending: 32,
+		MaxDeliver:    5,
+		DeliverPolicy: jetstream.DeliverAllPolicy,
+		Description:   "Gateway sender-pool pull consumer (gateway-authoritative)",
+	}
+	_, err := js.CreateOrUpdateConsumer(ctx, StreamOutbound, cfg)
+	if err != nil {
+		return fmt.Errorf("store: ensure sender-pool consumer: %w", err)
+	}
+	return nil
+}
