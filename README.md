@@ -83,6 +83,11 @@ See `.env.example` for the full list of overridable variables.
 
 Full design doc and phased roadmap live in `docs/system-architecture.md` (incoming).
 
+## Working docs
+
+- `docs/` — authoritative specs (system architecture, deployment, runbooks). What MIO **is**.
+- `plans/` — agent working memory: per-feature plan dirs (`{YYMMDD-HHMM}-{slug}/`) and a flat `plans/reports/` of cook + research outputs. These are decision history, **not specs** — code and `docs/` are the source of truth. Plans for shipped phases stay in place as a paper trail; if `plans/` grows past ~10 active dirs, move shipped ones under `plans/archive/`.
+
 ## Status
 
 POC. Phase tracker:
