@@ -174,15 +174,9 @@ func Handler(deps HandlerDeps) http.HandlerFunc {
 			ReceivedAt: timestamppb.Now(),
 			Attributes: nm.Attributes,
 		}
-		// Cliq bot adapter (sender.go) needs the channel name to address
-		// channelsbyname/{name}/message?bot_unique_name=. Pass via attributes
-		// (Message proto has no conversation_display_name field).
-		if nm.ConversationDisplayName != "" {
-			if protoMsg.Attributes == nil {
-				protoMsg.Attributes = map[string]string{}
-			}
-			protoMsg.Attributes["cliq_channel_name"] = nm.ConversationDisplayName
-		}
+		// Cliq bot adapter (sender.go) needs the channel unique_name (lowercase
+		// API slug, e.g. "ducdev"), NOT the chat title ("#DucDev"). Normalize
+		// stashes it via attributes["cliq_channel_unique_name"].
 		if nm.ParentExternalID != "" {
 			protoMsg.ParentConversationId = nm.ParentExternalID // external id as proxy until UUID resolved
 		}

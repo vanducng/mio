@@ -143,6 +143,15 @@ func Normalize(p *WebhookPayload) (*NormalizedMessage, error) {
 		nm.ConversationExternalID = p.Chat.ID
 		nm.ConversationDisplayName = p.Chat.Title
 	}
+	// Stash channel unique_name (Cliq API slug, e.g. "ducdev") so the outbound
+	// bot adapter can address /channelsbyname/{slug}/message. Title (e.g.
+	// "#DucDev") is a display string the API rejects with request_url_invalid.
+	if p.Chat != nil && p.Chat.ChannelUniqueName != "" {
+		if nm.Attributes == nil {
+			nm.Attributes = map[string]string{}
+		}
+		nm.Attributes["cliq_channel_name"] = p.Chat.ChannelUniqueName
+	}
 
 	// --- ConversationKind (decision tree from FINDINGS.md) ---
 	nm.ConversationKind = deriveKind(p)
