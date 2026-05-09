@@ -7,7 +7,7 @@
 # proto/gen/go/ is included via !proto/gen/go/ negation in .dockerignore.
 
 # ── Stage 1: builder ────────────────────────────────────────────────────────
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 ARG BUILD_VERSION=dev
 
