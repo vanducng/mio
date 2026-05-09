@@ -83,11 +83,13 @@ jobs:
 
       - name: golangci-lint
         run: |
-          golangci-lint run ./gateway/... ./sdk-go/...
+          (cd gateway && golangci-lint run ./...)
+          (cd sdk-go && golangci-lint run ./...)
 
       - name: go test (race detector)
         run: |
-          go test -race -cover ./gateway/... ./sdk-go/...
+          (cd gateway && go test -race -cover ./...)
+          (cd sdk-go && go test -race -cover ./...)
 
   # ── Python SDK + echo-consumer tests ──────────────────────────────────────
   test-python:
