@@ -1,12 +1,11 @@
 package zohocliq
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"net/url"
 
 	miov1 "github.com/vanducng/mio/proto/gen/go/mio/v1"
 )
@@ -21,6 +20,9 @@ type cliqEditRequest struct {
 // Edit updates an existing Cliq message in-place.
 // cmd.EditOfExternalId must be the Cliq message id returned by a prior Send call.
 // cmd.ConversationExternalId must be the Cliq chat id.
+//
+// Uses doWithSelfHeal — a stale-token 401 transparently refreshes and retries
+// once before surfacing as a terminal auth error. Symmetric with Send.
 func (a *Adapter) Edit(ctx context.Context, cmd *miov1.SendCommand) error {
 	convExtID := cmd.GetConversationExternalId()
 	msgExtID := cmd.GetEditOfExternalId()
@@ -38,28 +40,12 @@ func (a *Adapter) Edit(ctx context.Context, cmd *miov1.SendCommand) error {
 		return fmt.Errorf("cliq edit: marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v2/chats/%s/messages/%s",
-		a.baseURL, convExtID, msgExtID)
+	// Escape path segments — Cliq IDs are opaque and could theoretically
+	// include URL-special chars in future API versions.
+	endpoint := fmt.Sprintf("%s/api/v2/chats/%s/messages/%s",
+		a.baseURL, url.PathEscape(convExtID), url.PathEscape(msgExtID))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(reqBody))
-	if err != nil {
-		return fmt.Errorf("cliq edit: build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if a.botToken != "" {
-		// Cliq REST requires "Zoho-oauthtoken <token>", not standard Bearer.
-		req.Header.Set("Authorization", "Zoho-oauthtoken "+a.botToken)
-	}
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("cliq edit: http: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	respBody, _ := io.ReadAll(resp.Body)
-
-	if err := checkHTTPStatus(resp, respBody); err != nil {
+	if _, err := a.doWithSelfHeal(ctx, http.MethodPatch, endpoint, reqBody); err != nil {
 		return err
 	}
 

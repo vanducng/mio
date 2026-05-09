@@ -12,10 +12,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	miov1 "github.com/vanducng/mio/proto/gen/go/mio/v1"
 )
 
@@ -27,35 +30,68 @@ const (
 	defaultCliqBaseURL = "https://cliq.zoho.com"
 )
 
+// cliqSendSelfHealedTotal counts Cliq REST calls that succeeded only after
+// the self-heal path invalidated a stale-cached token and refreshed.
+//
+// outcome: "recovered" — second attempt with a fresh token returned 2xx
+//          "exhausted" — second attempt also returned 401 (truly bad creds)
+var cliqSendSelfHealedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "mio_gateway_cliq_send_self_healed_total",
+	Help: "Cliq REST calls that hit a stale-token 401 and re-attempted with a fresh token.",
+}, []string{"outcome"})
+
 // Adapter implements sender.Adapter for Zoho Cliq.
-// Constructed in init.go; all fields are read-only after construction.
+// Constructed in init.go; all fields except tokens are read-only after construction.
 type Adapter struct {
 	baseURL    string
-	botToken   string // OAuth access token for bot API calls
 	botName    string // bot unique_name (required for channelsbyname endpoint)
+	tokens     *tokenSource
 	httpClient *http.Client
 	logger     *slog.Logger
 }
 
 // NewAdapter builds an Adapter from environment variables.
-// Called from init.go — panics are acceptable (startup failure).
+// Called from init.go — panics are acceptable on partial config (startup failure
+// signals broken deploy explicitly, instead of waiting for the first 401).
 //
-//   - CLIQ_BOT_TOKEN (required): Zoho Cliq bot OAuth token
-//   - CLIQ_BOT_NAME  (required for outbound channel posts): bot unique name
-//   - CLIQ_API_BASE_URL (optional): override for tests
+// Required for production:
+//   - CLIQ_BOT_NAME: bot unique name (channelsbyname endpoint)
+//   - CLIQ_CLIENT_ID, CLIQ_CLIENT_SECRET, CLIQ_REFRESH_TOKEN: Zoho OAuth creds
+//
+// Optional:
+//   - CLIQ_API_BASE_URL: override Cliq base URL for tests
+//
+// If ALL three OAuth vars are absent, tokens remains nil — Send/Edit will
+// return an explicit error. This keeps test imports of the package working
+// without env wiring. If SOME are set but not all, panics — broken deploy.
 func NewAdapter() *Adapter {
-	botToken := os.Getenv("CLIQ_BOT_TOKEN")
+	clientID := os.Getenv("CLIQ_CLIENT_ID")
+	clientSecret := os.Getenv("CLIQ_CLIENT_SECRET")
+	refreshToken := os.Getenv("CLIQ_REFRESH_TOKEN")
 	botName := os.Getenv("CLIQ_BOT_NAME")
-	// Token + name are optional at init; outbound calls will fail explicitly
-	// if either is absent so we get a Term-level error message in the log.
+
+	// Partial-config detection: any one set means the operator intended OAuth
+	// but mis-typed the secret keys. Fail fast with a clear message.
+	setCount := 0
+	for _, v := range []string{clientID, clientSecret, refreshToken} {
+		if v != "" {
+			setCount++
+		}
+	}
+	if setCount != 0 && setCount != 3 {
+		panic(fmt.Sprintf("zohocliq: partial OAuth config — CLIQ_CLIENT_ID/CLIQ_CLIENT_SECRET/CLIQ_REFRESH_TOKEN must all be set or all empty (got %d/3)", setCount))
+	}
+
+	tokens := newTokenSource(clientID, clientSecret, refreshToken)
+
 	baseURL := os.Getenv("CLIQ_API_BASE_URL")
 	if baseURL == "" {
 		baseURL = defaultCliqBaseURL
 	}
 	return &Adapter{
-		baseURL:  baseURL,
-		botToken: botToken,
-		botName:  botName,
+		baseURL: baseURL,
+		botName: botName,
+		tokens:  tokens,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -106,28 +142,14 @@ func (a *Adapter) Send(ctx context.Context, cmd *miov1.SendCommand) (string, err
 		return "", fmt.Errorf("cliq send: marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v2/channelsbyname/%s/message?bot_unique_name=%s",
-		a.baseURL, channelName, a.botName)
+	// Escape user-controlled segments — channel names with special chars
+	// would otherwise corrupt the path. botName is operator-set so safe,
+	// but escape for symmetry / future-proofing against rename.
+	endpoint := fmt.Sprintf("%s/api/v2/channelsbyname/%s/message?bot_unique_name=%s",
+		a.baseURL, url.PathEscape(channelName), url.QueryEscape(a.botName))
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
+	resp, err := a.doWithSelfHeal(ctx, http.MethodPost, endpoint, reqBody)
 	if err != nil {
-		return "", fmt.Errorf("cliq send: build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if a.botToken != "" {
-		// Cliq REST requires "Zoho-oauthtoken <token>", not standard Bearer.
-		req.Header.Set("Authorization", "Zoho-oauthtoken "+a.botToken)
-	}
-
-	resp, err := a.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("cliq send: http: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	respBody, _ := io.ReadAll(resp.Body)
-
-	if err := checkHTTPStatus(resp, respBody); err != nil {
 		return "", err
 	}
 
@@ -142,6 +164,79 @@ func (a *Adapter) Send(ctx context.Context, cmd *miov1.SendCommand) (string, err
 		"synthetic_id", syntheticID,
 	)
 	return syntheticID, nil
+}
+
+// doWithSelfHeal performs a single Cliq REST call with one-shot 401 recovery.
+//
+// Algorithm:
+//  1. Get a token (cached or fresh from OAuth refresh)
+//  2. Build the request, send it
+//  3. On 2xx: return success
+//  4. On 401, FIRST attempt only: invalidate the cached token, loop to step 1
+//     (a freshly-rotated Zoho token will be minted; this masks "Zoho rotated
+//     my access token earlier than expires_in promised" races)
+//  5. On 401 SECOND attempt: surface the typed HTTPError → pool Terms with
+//     reason="auth" (genuine credential failure, manual rotation needed)
+//  6. Any non-401 error: return immediately (no point retrying with new token)
+//
+// Loop is bounded at 2 iterations.
+func (a *Adapter) doWithSelfHeal(ctx context.Context, method, url string, body []byte) (*http.Response, error) {
+	if a.tokens == nil {
+		return nil, fmt.Errorf("cliq: tokens not configured — set CLIQ_CLIENT_ID/CLIQ_CLIENT_SECRET/CLIQ_REFRESH_TOKEN")
+	}
+
+	var lastErr error
+	for attempt := range 2 {
+		token, err := a.tokens.Get(ctx)
+		if err != nil {
+			// refreshError already implements DeliveryError; surface as-is.
+			return nil, err
+		}
+
+		req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("cliq: build request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		// Cliq REST requires "Zoho-oauthtoken <token>", not standard Bearer.
+		req.Header.Set("Authorization", "Zoho-oauthtoken "+token)
+
+		resp, err := a.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("cliq: http: %w", err)
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
+		statusErr := checkHTTPStatus(resp, respBody)
+		if statusErr == nil {
+			if attempt > 0 {
+				// We recovered after one 401 + token refresh.
+				cliqSendSelfHealedTotal.WithLabelValues("recovered").Inc()
+				a.logger.Info("cliq: self-healed 401 with refreshed token", "url", url)
+			}
+			return resp, nil
+		}
+
+		lastErr = statusErr
+		httpErr, ok := statusErr.(*HTTPError)
+		// Self-heal only on 401 first attempt. Any other status (or 401 on retry)
+		// falls through to return.
+		if !ok || httpErr.Code != http.StatusUnauthorized || attempt > 0 {
+			if attempt > 0 && ok && httpErr.Code == http.StatusUnauthorized {
+				cliqSendSelfHealedTotal.WithLabelValues("exhausted").Inc()
+			}
+			return resp, statusErr
+		}
+
+		// First-attempt 401: invalidate cache, loop to refresh token.
+		a.tokens.Invalidate()
+		a.logger.Warn("cliq: 401 with cached token, invalidating + retrying",
+			"url", url)
+	}
+	// Unreachable: loop bound is 2, each branch returns. Defensive return.
+	return nil, lastErr
 }
 
 // checkHTTPStatus converts non-2xx Cliq responses into typed errors.
@@ -163,9 +258,9 @@ func checkHTTPStatus(resp *http.Response, body []byte) error {
 // Implements sender.DeliveryError via the StatusCode/IsRetryable/IsRateLimited
 // methods — no import cycle because sender package defines the interface only.
 type HTTPError struct {
-	Code        int    // HTTP status code
-	Body        string // raw response body (for logging)
-	RetryAfter  int    // Retry-After seconds (0 = header absent)
+	Code       int    // HTTP status code
+	Body       string // raw response body (for logging)
+	RetryAfter int    // Retry-After seconds (0 = header absent)
 }
 
 func (e *HTTPError) Error() string {

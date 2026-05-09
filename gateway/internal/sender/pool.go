@@ -309,10 +309,17 @@ func retryAfterDelay(retryAfterSecs int) time.Duration {
 }
 
 // classify4xx maps a DeliveryError to a bounded reason label.
+// Bounded set: auth, forbidden, not_found, bad_request, refresh_failed, other.
 func classify4xx(de DeliveryError) string {
-	// DeliveryError does not expose status codes directly; use error string
-	// heuristic. Adapters should encode "401"/"403"/"404" in their message.
-	// Bounded set: auth, forbidden, not_found, bad_request, other.
+	// Adapters can override the default status-code mapping by implementing
+	// Reason() — useful for distinguishing OAuth-refresh-endpoint failures
+	// from regular Cliq-API auth failures (operationally different fixes).
+	type reasonProvider interface{ Reason() string }
+	if rp, ok := de.(reasonProvider); ok {
+		if r := rp.Reason(); r != "" {
+			return r
+		}
+	}
 	type statusCoder interface{ StatusCode() int }
 	if sc, ok := de.(statusCoder); ok {
 		switch sc.StatusCode() {

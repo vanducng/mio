@@ -46,7 +46,8 @@ config:
 # For prod: use Secret Manager + External Secrets Operator.
 secrets:
   # Name of a pre-existing K8s Secret with keys:
-  #   DATABASE_URL, CLIQ_WEBHOOK_SECRET, CLIQ_BOT_TOKEN, CLIQ_BOT_SCOPE
+  #   DATABASE_URL, CLIQ_WEBHOOK_SECRET, CLIQ_CLIENT_ID, CLIQ_CLIENT_SECRET,
+  #   CLIQ_REFRESH_TOKEN, CLIQ_BOT_SCOPE, CLIQ_BOT_NAME
   existingSecret: "mio-gateway-secrets"
 
 service:
