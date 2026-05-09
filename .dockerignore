@@ -1,6 +1,10 @@
 # Version control
 .git
 
+# Go workspace file is dev-only — Dockerfiles rely on replace directives.
+go.work
+go.work.sum
+
 # Local data volumes (never in build context)
 appdata/
 
