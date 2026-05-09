@@ -33,7 +33,8 @@ strategy:
 # Non-secret config passed as env vars via ConfigMap.
 config:
   natsUrl: "nats://mio-nats:4222"
-  tenantId: "default"
+  tenantId: "00000000-0000-0000-0000-000000000001"
+  accountId: "00000000-0000-0000-0000-000000000002"
   schemaVersionStrict: "true"
   migrateOnStart: "false"   # Migration Job owns schema; pods must NOT run migrations.
   logLevel: "info"
