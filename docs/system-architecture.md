@@ -1,6 +1,6 @@
 # MIO — System Architecture
 
-> Status: design doc, locked-in for the POC. Last updated 2026-05-07.
+> Status: design doc, locked-in for the POC. Last updated 2026-05-10 (P9 attachment-persistence shipped).
 
 MIO is the messaging I/O platform for [MIU](https://github.com/vanducng/miu).
 Channels are messy; agents shouldn't care. MIO normalizes every chat
@@ -44,6 +44,7 @@ flowchart LR
     gw["mio-gateway<br/>(Go, stateless)"]
     bus[("NATS JetStream<br/>3-replica cluster")]
     sink["mio-sink-gcs<br/>(Go consumer)"]
+    dl["mio-attachment-downloader<br/>(Go sidecar)"]
     sdkgo["sdk-go"]
     sdkpy["sdk-py"]
   end
@@ -53,7 +54,7 @@ flowchart LR
     pg[(Postgres<br/>+ pgvector)]
   end
 
-  gcs[(GCS<br/>raw archive)]
+  gcs[(GCS<br/>raw archive +<br/>attachments)]
   bq[(BigQuery<br/>external tables)]
 
   cliq -- webhook --> gw
@@ -62,7 +63,12 @@ flowchart LR
   disc -- webhook --> gw
 
   gw -- "publish<br/>MESSAGES_INBOUND" --> bus
-  bus -- "consume<br/>(ai-consumer)" --> ai
+  bus -- "consume<br/>(gcs-archiver)" --> sink
+  sink --> gcs
+  bus -- "consume<br/>(attachment-downloader)" --> dl
+  dl -- "fetch bytes,<br/>persist,<br/>enrich" --> gcs
+  dl -- "publish<br/>MESSAGES_INBOUND_ENRICHED" --> bus
+  bus -- "consume<br/>(ai-consumer-enriched)" --> ai
   ai --> pg
   ai -- "publish<br/>MESSAGES_OUTBOUND" --> bus
   bus -- "consume<br/>(sender-pool)" --> gw
@@ -71,12 +77,11 @@ flowchart LR
   gw -.-> tg
   gw -.-> disc
 
-  bus -- "consume<br/>(gcs-archiver)" --> sink
-  sink --> gcs
   gcs -. external tables .-> bq
 
   sdkgo -. used by .-> gw
   sdkgo -. used by .-> sink
+  sdkgo -. used by .-> dl
   sdkpy -. used by .-> ai
 ```
 
@@ -97,7 +102,10 @@ sequenceDiagram
   participant GW as mio-gateway
   participant DB as Postgres<br/>(idempotency)
   participant JS as JetStream<br/>MESSAGES_INBOUND
-  participant AI as MIU AI service<br/>(ai-consumer)
+  participant DL as mio-attachment-<br/>downloader
+  participant GCS as GCS<br/>(attachments)
+  participant JSE as JetStream<br/>MESSAGES_INBOUND_ENRICHED
+  participant AI as MIU AI service<br/>(ai-consumer-enriched)
 
   Ch->>GW: POST /webhooks/{channel} (signed)
   GW->>GW: verify HMAC signature
@@ -114,9 +122,22 @@ sequenceDiagram
     Note over GW,Ch: ack inside channel deadline (≤3s)
   end
 
-  JS->>AI: Pull (ai-consumer, MaxAckPending=1)
+  JS->>DL: Pull (attachment-downloader, MaxAckPending=N)
+  alt has attachments
+    DL->>DL: fetch bytes from platform URL<br/>(within platform TTL)
+    DL->>GCS: Put (content-addressed, deduplicated)
+    DL->>DL: enrich: add storage_key,<br/>content_sha256
+  else no attachments
+    DL->>DL: pass through unchanged
+  end
+  DL->>JSE: Publish enriched Message<br/>to MESSAGES_INBOUND_ENRICHED
+  DL->>JS: Ack
+  Note over DL: idempotent; republish<br/>safe on error redo
+
+  JSE->>AI: Pull (ai-consumer-enriched, MaxAckPending=1)
   AI->>AI: LangGraph run (2–30s)
-  AI->>JS: Ack
+  AI->>AI: fetch attachment bytes from<br/>storage_key (no platform TTL risk)
+  AI->>JSE: Ack
   Note over AI: AI may publish "thinking..."<br/>SendCommand immediately,<br/>then edit when done
 ```
 
@@ -168,11 +189,12 @@ a blank thread.
 
 ## 5. Streams and subjects
 
-Two streams, both file-backed, both `mio.v1` envelope.
+Three streams, all file-backed, all `mio.v1` envelope.
 
 | Stream | Subject pattern | Retention | Max age | Purpose |
 |---|---|---|---|---|
-| `MESSAGES_INBOUND` | `mio.inbound.>` | `limits` | 7d | Replay-friendly. AI consumer + sink-gcs both subscribe. |
+| `MESSAGES_INBOUND` | `mio.inbound.>` | `limits` | 7d | Raw inbound. Gateway publisher. Attachment-downloader + sink-gcs consumers. (Old AI consumer deprecated.) |
+| `MESSAGES_INBOUND_ENRICHED` | `mio.inbound_enriched.>` | `limits` | 7d | Enriched with persistent attachment URLs. Attachment-downloader publisher. AI consumer + future analytics subscribers. |
 | `MESSAGES_OUTBOUND` | `mio.outbound.>` | `workqueue` | 23h | Drain semantics. Sender-pool is the only consumer. |
 
 ### Subject grammar
@@ -184,13 +206,14 @@ mio.<direction>.<channel_type>.<account_id>.<conversation_id>[.<message_id>]
         │              │             │              └─ enables per-conversation ordering filters
         │              │             └─ per-account rate-limit / multi-tenant scoping (one tenant may run multiple accounts)
         │              └─ registry slug from proto/channels.yaml (zoho_cliq, slack, telegram, discord) — underscore for multi-word
-        └─ inbound | outbound
+        └─ inbound | inbound_enriched | outbound
 ```
 
 Examples:
 
 ```
 mio.inbound.zoho_cliq.<account-uuid>.<conv-uuid>
+mio.inbound_enriched.zoho_cliq.<account-uuid>.<conv-uuid>
 mio.outbound.slack.<account-uuid>.<conv-uuid>.<msg-uuid>
 mio.outbound.zoho_cliq.<account-uuid>.<conv-uuid>.<msg-uuid>
 ```
@@ -210,13 +233,16 @@ Why these dimensions live in the subject:
 
 | Consumer | Stream | Type | `MaxAckPending` | Notes |
 |---|---|---|---|---|
-| `ai-consumer` | `MESSAGES_INBOUND` | Pull, durable | **1** | Single-flight. Per-thread ordering enforced globally for now; partition by subject when throughput demands. |
+| `attachment-downloader` | `MESSAGES_INBOUND` | Pull, durable | **N** | Fetches attachment bytes within platform TTL, persists to storage, publishes to enriched stream. Stateless; can scale horizontally. |
+| `gcs-archiver` | `MESSAGES_INBOUND` | Pull, durable | 64 | Long-tail consumer; falls behind without affecting attachment or AI path. Archives raw inbound. |
+| `ai-consumer-enriched` | `MESSAGES_INBOUND_ENRICHED` | Pull, durable | **1** | Single-flight. Per-thread ordering enforced globally for now; partition by subject when throughput demands. |
 | `sender-pool` | `MESSAGES_OUTBOUND` | Pull, durable | **32** | Workqueue drain. One pool per channel adapter eventually. |
-| `gcs-archiver` | `MESSAGES_INBOUND` | Pull, durable | 64 | Long-tail consumer; falls behind without affecting AI path. |
 
-Adding a fourth consumer (analytics, training-data tap, audit) is a
-config change, not an engineering task. That's the *whole point* of the
-decoupled bus.
+*Deprecated:* `ai-consumer` on `MESSAGES_INBOUND` — remove after successful
+enriched-stream cutover via `nats consumer rm MESSAGES_INBOUND ai-consumer`.
+
+Adding a new consumer (analytics, training-data tap, audit) is a config
+change, not an engineering task. That's the *whole point* of the decoupled bus.
 
 ---
 
@@ -242,10 +268,11 @@ skip the publish.
 The bus does not order across subjects. We enforce ordering by:
 
 - **Per-stream**: NATS gives FIFO within a stream
-- **Per-conversation**: `MaxAckPending=1` on `ai-consumer` makes the consumer
-  effectively single-flight. Slow but correct
+- **Per-conversation**: `MaxAckPending=1` on `ai-consumer-enriched` makes the
+  consumer effectively single-flight. Slow but correct. (Attachment-downloader
+  has `MaxAckPending > 1` since it batches fetches and has no AI latency.)
 - **Graduation path**: once we need throughput, partition by subject —
-  one consumer per `mio.inbound.<channel_type>.<account_id>.<conversation_id>`
+  one consumer per `mio.inbound_enriched.<channel_type>.<account_id>.<conversation_id>`
   shard. Documented but not built
 
 ### Rate limits
@@ -294,6 +321,7 @@ flowchart TB
     direction TB
     subgraph "ns: mio"
       gwd["mio-gateway<br/>Deployment, 2 replicas"]
+      dld["mio-attachment-downloader<br/>Deployment, 1 replica (POC)"]
       sinkd["mio-sink-gcs<br/>Deployment, 1 replica"]
       subgraph "StatefulSet: mio-nats (3 replicas)"
         n0["nats-0<br/>zone-a · pd-balanced"]
@@ -310,9 +338,12 @@ flowchart TB
 
   ing["Cloud LB / Ingress"] --> gwd
   gwd <--> n0 & n1 & n2
+  dld <--> n0 & n1 & n2
   aid <--> n0 & n1 & n2
   sinkd <--> n0 & n1 & n2
-  sinkd --> gcs[(GCS bucket<br/>via Workload Identity)]
+  dld --> gcs
+  sinkd --> gcs
+  gcs["GCS bucket<br/>(raw + attachments)<br/>via Workload Identity"]
   promex --> mon["Prometheus / Grafana"]
 ```
 
@@ -369,6 +400,7 @@ are acceptable; see P5.
 
 ## 12. Open questions
 
-- Per-thread ordering: stay global `MaxAckPending=1` or shard-by-subject? Decide when first throughput regression appears.
+- Per-thread ordering on enriched stream: stay global `MaxAckPending=1` or shard-by-subject? Decide when first throughput regression appears. (Attachment-downloader's `MaxAckPending > 1` doesn't need ordering guarantees.)
 - Edit semantics across channels: Slack and Cliq both support edits with the original `channel_message_id`; Telegram supports `edit_message_text`; Discord requires the original message be from the same bot. The `SendCommand.edit_of` field needs a per-channel resolver — design at P5, not now.
 - Dead-letter strategy: separate `MESSAGES_DLQ` stream vs in-place `terminated` flag? Defer until we hit a real channel-permanent failure in the wild.
+- Attachment backend portability: S3, Azure Blob, Backblaze B2? Factory pattern ready; plug in a new Storage impl. Defer multi-backend support until operational need arises.
