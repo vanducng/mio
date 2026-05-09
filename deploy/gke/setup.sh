@@ -69,7 +69,7 @@ gcloud container clusters get-credentials "$CLUSTER_NAME" \
 # ── 2. Namespace ──────────────────────────────────────────────────────────────
 echo ""
 echo "==> [2/9] Creating namespace $NAMESPACE..."
-kubectl apply -f deploy/k8s/namespace.yaml
+kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
 # ── 3. Cloud SQL Postgres 16 (private IP) ─────────────────────────────────────
 echo ""
