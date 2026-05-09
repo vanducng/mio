@@ -67,18 +67,6 @@ func withOAuthURL(u string) tokenSourceOpt {
 	return func(t *tokenSource) { t.oauthURL = u }
 }
 
-// withHTTPClient overrides the HTTP client. Test-only — main code uses the
-// constructor's default 5s-timeout client.
-func withHTTPClient(c *http.Client) tokenSourceOpt {
-	return func(t *tokenSource) { t.httpClient = c }
-}
-
-// withLogger overrides the slog logger. Test-only — main code defaults to
-// slog.Default().
-func withLogger(l *slog.Logger) tokenSourceOpt {
-	return func(t *tokenSource) { t.logger = l }
-}
-
 // newTokenSource constructs a tokenSource. clientID / clientSecret /
 // refreshToken are required; constructor returns nil only if all three are
 // empty (caller decides whether that is fatal).
@@ -126,14 +114,11 @@ func (t *tokenSource) Invalidate() {
 }
 
 // refreshLocked posts to the OAuth endpoint and updates the cache.
-// MUST be called with t.mu held. Double-checks the cache after the lock
-// acquire to dedupe goroutines that stampeded a cold cache.
+// MUST be called with t.mu held. Stampede dedupe falls out naturally:
+// when N goroutines call Get on a cold cache, only one acquires the lock
+// at a time. The first one runs this function (one OAuth request); the
+// next one hits the cache check at the top of Get and never reaches here.
 func (t *tokenSource) refreshLocked(ctx context.Context) (string, error) {
-	// Double-check: another goroutine may have refreshed while we waited.
-	if t.current != "" && time.Until(t.expiresAt) > refreshSafetyWindow {
-		return t.current, nil
-	}
-
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"client_id":     {t.clientID},
@@ -214,9 +199,16 @@ func (e *refreshError) Error() string {
 
 func (e *refreshError) Unwrap() error { return e.Err }
 
-// IsRetryable returns false — refresh failures are NEVER retryable at the
-// pool level. Either credentials are wrong (manual rotation needed) or the
-// OAuth endpoint is down (the next message will refresh again on its own).
+// IsRetryable returns false. Tradeoff: during a Zoho OAuth outage we will
+// Term incoming messages instead of Nak'ing them. Rationale:
+//   - 401/4xx from OAuth means credentials are wrong → no retry can help
+//   - 5xx from OAuth means Zoho is down → JS redelivery would just hammer
+//     a broken upstream; better to drop and rely on operator alerting
+//     (the distinct reason="refresh_failed" label paged separately from
+//     reason="auth" gives ops the signal to investigate, not bot-loop-retry)
+//
+// If a future production deployment needs at-least-once during OAuth blips,
+// flip this to `return e.Status >= 500` — pool will Nak with jitter.
 func (e *refreshError) IsRetryable() bool { return false }
 
 // IsRateLimited returns false — Zoho OAuth doesn't rate-limit in our usage.
