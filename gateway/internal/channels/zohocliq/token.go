@@ -42,9 +42,11 @@ var cliqTokenRefreshTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 //
 // Concurrency model: a single sync.Mutex protects (current, expiresAt) and
 // also serialises the refresh HTTP call. Cold-cache stampede (N goroutines
-// asking for the first token) deduplicates naturally — first goroutine holds
-// the lock during refresh, later goroutines see a populated cache via the
-// double-check after acquiring the lock.
+// asking for the first token) deduplicates naturally — the lock is held
+// throughout Get, so once goroutine A finishes refreshLocked and writes
+// (current, expiresAt), goroutine B acquires the lock, hits the cache check
+// at the top of Get, and returns the cached token without reaching the
+// refresh path.
 type tokenSource struct {
 	clientID     string
 	clientSecret string
