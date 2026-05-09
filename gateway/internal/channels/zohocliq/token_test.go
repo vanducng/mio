@@ -31,7 +31,7 @@ func stubOAuthServer(t *testing.T, accessToken string, expiresIn int) (*httptest
 			t.Errorf("expected grant_type=refresh_token, got %q", r.Form.Get("grant_type"))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"access_token":%q,"expires_in":%d,"api_domain":"https://www.zohoapis.com","token_type":"Bearer"}`,
+		_, _ = fmt.Fprintf(w, `{"access_token":%q,"expires_in":%d,"api_domain":"https://www.zohoapis.com","token_type":"Bearer"}`,
 			accessToken, expiresIn)
 	}))
 	t.Cleanup(srv.Close)
