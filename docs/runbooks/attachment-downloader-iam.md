@@ -1,77 +1,53 @@
-# Attachment-downloader IAM setup
+# Attachment-downloader IAM (terragrunt-managed)
 
-One-time runbook to create the GCS service account and Workload Identity
-binding for the `mio-attachment-downloader` sidecar.
+The `mio-attachment-downloader` sidecar's GCP service account, IAM
+bindings, and bucket lifecycle rules are all managed by terragrunt in
+the `infra` repo. There is no manual gcloud step.
 
-## Prerequisites
+## Source of truth (`infra` repo)
 
-- `gcloud` authenticated with `roles/iam.serviceAccountAdmin` on project
-  `dp-prod-7e26`.
-- `roles/storage.admin` on bucket `gs://ab-spectrum-backups-prod` (for the
-  prefix-scoped binding step).
-- GKE cluster with Workload Identity enabled; namespace `mio` exists.
+| Resource | File |
+|---|---|
+| GSA `prod-mio-attachments-sa@...` + WI binding + self-impersonation | `terraform/gcp/prod/service-accounts/service-accounts.yaml` |
+| Bucket prefix-scoped IAM binding (`storage.objectAdmin` on `mio/attachments/`) | `terraform/gcp/prod/gcs/buckets.yaml` |
+| Bucket lifecycle rule (7d expiry on `mio/attachments/`) | `terraform/gcp/prod/gcs/buckets.yaml` |
+| Workload-Identity GSA reference in HelmRelease | `fluxcd/apps/prod/mio/release-attachment-downloader.yaml` |
 
-## Steps
-
-### 1. Create the GSA
+## Apply changes
 
 ```bash
-gcloud iam service-accounts create mio-attachments \
-  --display-name="mio attachment downloader" \
-  --project=dp-prod-7e26
+cd infra/terraform/gcp/prod/service-accounts && terragrunt apply
+cd infra/terraform/gcp/prod/gcs              && terragrunt apply
 ```
 
-### 2. Grant `roles/storage.objectAdmin` scoped to the prefix
-
-The IAM Condition restricts the binding to objects under
-`mio/attachments/`, so the sidecar can never touch other prefixes
-(e.g. existing `cnpg/` CNPG backups).
+The HelmRelease in `fluxcd/apps/prod/mio/` is reconciled by Flux on a
+30m interval, or force a re-reconcile:
 
 ```bash
-gcloud storage buckets add-iam-policy-binding gs://ab-spectrum-backups-prod \
-  --member=serviceAccount:mio-attachments@dp-prod-7e26.iam.gserviceaccount.com \
-  --role=roles/storage.objectAdmin \
-  --condition='expression=resource.name.startsWith("projects/_/buckets/ab-spectrum-backups-prod/objects/mio/attachments/"),title=mio_attachments_prefix_only,description=Restrict to the mio attachments prefix'
+flux reconcile source git flux-system
+flux reconcile kustomization apps -n flux-system
+flux reconcile helmrelease mio-attachment-downloader -n mio
 ```
 
-### 3. Grant `roles/iam.serviceAccountTokenCreator` on self (V4 signed-URL signing)
-
-GCS V4 signed URLs require the runtime identity to be able to sign blobs
-on behalf of itself.
+## Verify
 
 ```bash
-gcloud iam service-accounts add-iam-policy-binding \
-  mio-attachments@dp-prod-7e26.iam.gserviceaccount.com \
-  --role=roles/iam.serviceAccountTokenCreator \
-  --member=serviceAccount:mio-attachments@dp-prod-7e26.iam.gserviceaccount.com
-```
-
-### 4. Workload Identity binding KSA → GSA
-
-```bash
-gcloud iam service-accounts add-iam-policy-binding \
-  mio-attachments@dp-prod-7e26.iam.gserviceaccount.com \
-  --role=roles/iam.workloadIdentityUser \
-  --member="serviceAccount:dp-prod-7e26.svc.id.goog[mio/mio-attachment-downloader]"
-```
-
-### 5. Verify
-
-After the chart is deployed:
-
-```bash
+# KSA carries the right WI annotation
 kubectl -n mio get sa mio-attachment-downloader -o yaml | grep iam.gke.io
-# expected: iam.gke.io/gcp-service-account: mio-attachments@dp-prod-7e26.iam.gserviceaccount.com
+# expected: iam.gke.io/gcp-service-account: prod-mio-attachments-sa@dp-prod-7e26.iam.gserviceaccount.com
+
+# GSA exists with self-impersonation + WI binding
+gcloud iam service-accounts get-iam-policy \
+  prod-mio-attachments-sa@dp-prod-7e26.iam.gserviceaccount.com
+
+# Bucket binding (look for the prefix-scoped condition)
+gcloud storage buckets get-iam-policy gs://ab-spectrum-backups-prod \
+  --format=json | jq '.bindings[] | select(.members[] | contains("mio-attachments"))'
 ```
 
-## Rollback
+## What if the operator has no terragrunt access?
 
-```bash
-gcloud storage buckets remove-iam-policy-binding gs://ab-spectrum-backups-prod \
-  --member=serviceAccount:mio-attachments@dp-prod-7e26.iam.gserviceaccount.com \
-  --role=roles/storage.objectAdmin
-
-gcloud iam service-accounts delete \
-  mio-attachments@dp-prod-7e26.iam.gserviceaccount.com \
-  --project=dp-prod-7e26
-```
+Run the runbook against a separate GCP project / separate prefix on a
+dev bucket. Do not bypass terragrunt for prod — drift between manual
+gcloud changes and terragrunt-managed state will be reverted on the
+next apply.
