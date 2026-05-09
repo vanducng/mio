@@ -39,15 +39,21 @@ spec:
             capabilities:
               drop: ["ALL"]
           command: ["/gateway", "migrate", "up"]
-          envFrom:
-            - configMapRef:
-                name: {{ include "mio-gateway.fullname" . }}
+          # Pre-install hook fires before the ConfigMap exists, so envFrom
+          # configMapRef would NotFound-loop. Inline the required envs from
+          # .Values.config directly so the job is self-sufficient.
           env:
             - name: MIO_POSTGRES_DSN
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret }}
                   key: DATABASE_URL
+            - name: MIO_TENANT_ID
+              value: {{ .Values.config.tenantId | quote }}
+            - name: MIO_ACCOUNT_ID
+              value: {{ .Values.config.accountId | quote }}
+            - name: MIO_NATS_URLS
+              value: {{ .Values.config.natsUrl | quote }}
             - name: MIO_MIGRATE_ON_START
               value: "true"
           resources:
