@@ -22,6 +22,23 @@ func TestInbound_HappyPath(t *testing.T) {
 	}
 }
 
+func TestInboundEnriched_HappyPath(t *testing.T) {
+	got, err := InboundEnriched("zoho_cliq", "acct-uuid-001", "conv-uuid-002")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "mio.inbound_enriched.zoho_cliq.acct-uuid-001.conv-uuid-002"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestInboundEnriched_RejectsBadChannel(t *testing.T) {
+	if _, err := InboundEnriched("not_a_channel", "a", "c"); err == nil {
+		t.Fatal("expected error for unknown channel")
+	}
+}
+
 func TestOutbound_NoMessageID(t *testing.T) {
 	got, err := Outbound("zoho_cliq", "acct-uuid-001", "conv-uuid-002")
 	if err != nil {

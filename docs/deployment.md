@@ -136,3 +136,57 @@ re-bootstrap:
 Ordering matters: do **not** add replicas before storage, or new pods
 will join with empty JetStream state and fight the existing pod over
 stream leadership.
+
+## Attachment persistence flow (P9)
+
+**Goal:** AI consumers always retrieve attachment bytes regardless of
+platform URL TTLs (Cliq's are ~12 min).
+
+### Streams
+
+| Stream | Subjects | Retention | Producer | Consumer(s) |
+|---|---|---|---|---|
+| `MESSAGES_INBOUND` | `mio.inbound.>` | 7d | gateway | sink-gcs (archive), `mio-attachment-downloader` (sidecar) |
+| `MESSAGES_INBOUND_ENRICHED` | `mio.inbound_enriched.>` | 7d | `mio-attachment-downloader` | echo / AI consumers |
+| `MESSAGES_OUTBOUND` | `mio.outbound.>` | 24h | echo / AI consumers | gateway sender pool |
+
+The sidecar provisions `MESSAGES_INBOUND_ENRICHED` idempotently on boot.
+
+### Object storage layout
+
+```
+gs://ab-spectrum-backups-prod/
+└── mio/attachments/
+    └── {channel_type}/yyyy=YYYY/mm=MM/dd=DD/{sha256[:2]}/{sha256}{ext}
+```
+
+- Content-addressable: same image = single object.
+- Partitioned by `received_at` for prefix-delete + chronological cleanup.
+- Lifecycle rule: 7d expiry on `mio/attachments/` prefix (matches JetStream MaxAge).
+- Object metadata: `sha256`, `account_id` (used for GDPR sweep filtering).
+
+### Signed URLs
+
+Default TTL: 1h. Re-mint from `Attachment.storage_key` via the CLI:
+
+```bash
+mio-attachment-cli signed-url <key> --ttl=1h
+```
+
+### GDPR delete
+
+See [`docs/runbooks/attachment-gdpr-delete.md`](runbooks/attachment-gdpr-delete.md).
+
+### IAM
+
+See [`docs/runbooks/attachment-downloader-iam.md`](runbooks/attachment-downloader-iam.md).
+
+### Operator notes
+
+- The 7d round-trip success criterion (image retrievable ≥7d later) cannot
+  be verified at deploy time — re-test ≥7d after first deploy.
+- Backend swap (GCS→S3) is one new file under
+  `attachment-downloader/internal/storage/s3/` plus an env flip
+  (`MIO_STORAGE_BACKEND=s3`); zero changes to worker / consumer / sidecar core.
+- Old durable `ai-consumer` on `MESSAGES_INBOUND` should be removed after
+  successful enriched-stream cutover: `nats consumer rm MESSAGES_INBOUND ai-consumer`.

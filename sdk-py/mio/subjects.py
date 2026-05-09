@@ -56,6 +56,25 @@ def inbound(channel_type: str, account_id: str, conversation_id: str) -> str:
     return f"mio.inbound.{channel_type}.{account_id}.{conversation_id}"
 
 
+def inbound_enriched(channel_type: str, account_id: str, conversation_id: str) -> str:
+    """Build the enriched-stream inbound subject.
+
+    Emitted by the attachment-downloader sidecar after attachment URLs have
+    been rewritten to stable storage URLs. Same shape as ``inbound`` but with
+    the ``inbound_enriched`` verb.
+
+    Returns: mio.inbound_enriched.<channel_type>.<account_id>.<conversation_id>
+    """
+    _validate_channel_type(channel_type)
+    for tok, field in [
+        (channel_type, "channel_type"),
+        (account_id, "account_id"),
+        (conversation_id, "conversation_id"),
+    ]:
+        _validate_token(tok, field)
+    return f"mio.inbound_enriched.{channel_type}.{account_id}.{conversation_id}"
+
+
 def outbound(
     channel_type: str,
     account_id: str,

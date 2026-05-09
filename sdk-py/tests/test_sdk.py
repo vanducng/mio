@@ -14,7 +14,7 @@ Covers (no live NATS required):
 import pytest
 from prometheus_client import CollectorRegistry
 
-from mio.subjects import inbound, outbound
+from mio.subjects import inbound, inbound_enriched, outbound
 from mio.version import verify, verify_command, SCHEMA_VERSION
 from mio.channeltypes import KNOWN
 from mio.metrics import Metrics, HISTOGRAM_BUCKETS
@@ -58,6 +58,18 @@ class _FakeCmd:
 def test_inbound_happy_path():
     result = inbound("zoho_cliq", "acct-uuid-001", "conv-uuid-002")
     assert result == "mio.inbound.zoho_cliq.acct-uuid-001.conv-uuid-002"
+
+
+def test_inbound_enriched_happy_path():
+    result = inbound_enriched("zoho_cliq", "acct-uuid-001", "conv-uuid-002")
+    assert result == "mio.inbound_enriched.zoho_cliq.acct-uuid-001.conv-uuid-002"
+
+
+def test_inbound_enriched_rejects_unknown_channel():
+    import pytest
+
+    with pytest.raises(ValueError):
+        inbound_enriched("not_a_channel", "a", "c")
 
 
 def test_outbound_no_message_id():

@@ -19,6 +19,7 @@ jobs:
       sdk-py: ${{ steps.filter.outputs.sdk-py }}
       proto: ${{ steps.filter.outputs.proto }}
       helm: ${{ steps.filter.outputs.helm }}
+      attachment-downloader: ${{ steps.filter.outputs.attachment-downloader }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,6 +45,10 @@ jobs:
               - 'buf.gen.yaml'
             helm:
               - 'deploy/charts/**'
+            attachment-downloader:
+              - 'attachment-downloader/**'
+              - 'sdk-go/**'
+              - 'proto/gen/go/**'
 
   # ── Proto lint + breaking check ────────────────────────────────────────────
   test-proto:
@@ -150,6 +155,7 @@ jobs:
           helm lint deploy/charts/mio-gateway
           helm lint deploy/charts/mio-sink-gcs
           helm lint deploy/charts/mio-echo-consumer
+          helm lint deploy/charts/mio-attachment-downloader
 
       - name: helm template (render check)
         run: |
@@ -161,6 +167,8 @@ jobs:
           helm template test-sink-gcs deploy/charts/mio-sink-gcs \
             --set serviceAccount.gcpServiceAccount=mio-sink-gcs@example.iam.gserviceaccount.com
           helm template test-echo-consumer deploy/charts/mio-echo-consumer
+          helm template test-attachment-downloader deploy/charts/mio-attachment-downloader \
+            --set serviceAccount.gcpServiceAccount=mio-attachments@example.iam.gserviceaccount.com
 
   # ── Build + push gateway image (main push only) ────────────────────────────
   build-gateway:
@@ -244,6 +252,65 @@ jobs:
             ghcr.io/vanducng/mio/sink-gcs:main
           cache-from: type=registry,ref=ghcr.io/vanducng/mio/sink-gcs:cache
           cache-to: type=registry,ref=ghcr.io/vanducng/mio/sink-gcs:cache,mode=max
+          platforms: linux/amd64
+
+  # ── attachment-downloader test ────────────────────────────────────────────
+  test-attachment-downloader:
+    needs: changes
+    if: needs.changes.outputs.attachment-downloader == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: buf generate
+        run: buf generate proto
+
+      - name: go test
+        run: cd attachment-downloader && go test ./...
+
+  # ── Build + push attachment-downloader image (main push only) ─────────────
+  build-attachment-downloader:
+    needs: [changes, test-attachment-downloader]
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.attachment-downloader == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          cache: true
+
+      - name: buf generate (proto/gen/* are gitignored)
+        run: buf generate proto
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push attachment-downloader
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: attachment-downloader/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/vanducng/mio/attachment-downloader:${{ github.sha }}
+            ghcr.io/vanducng/mio/attachment-downloader:main
+          cache-from: type=registry,ref=ghcr.io/vanducng/mio/attachment-downloader:cache
+          cache-to: type=registry,ref=ghcr.io/vanducng/mio/attachment-downloader:cache,mode=max
           platforms: linux/amd64
 
   # ── Build + push echo-consumer image (main push only) ─────────────────────
