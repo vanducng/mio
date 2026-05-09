@@ -153,11 +153,12 @@ async def handle(msg: Message, client: mio.Client) -> SendCommand:
     )
     # attributes is a proto map<string,string> — assign via update().
     cmd.attributes.update({"replied_to": msg.id})
-    # Cliq bot adapter posts to channelsbyname/{name}/message and needs the
-    # human channel name; conversation_display_name carries Cliq's chat title
-    # which equals the channel unique_name for channel chats.
-    if msg.conversation_display_name:
-        cmd.attributes["cliq_channel_name"] = msg.conversation_display_name
+    # Cliq bot adapter (gateway sender) needs the channel unique_name to
+    # address channelsbyname/{name}/message. The cliq inbound handler stored
+    # it in msg.attributes["cliq_channel_name"]; propagate it onto the cmd.
+    chan_name = msg.attributes.get("cliq_channel_name", "")
+    if chan_name:
+        cmd.attributes["cliq_channel_name"] = chan_name
 
     # SDK sets Nats-Msg-Id = "out:<cmd.id>" automatically; do NOT set manually.
     await client.publish_outbound(cmd)
