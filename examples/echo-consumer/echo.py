@@ -101,8 +101,13 @@ from ulid import ULID  # noqa: E402
 # ---------------------------------------------------------------------------
 
 NATS_URL: str = os.environ.get("NATS_URL", "nats://localhost:4222")
-INBOUND_SUBJECT: str = "mio.inbound.>"
-DURABLE: str = "ai-consumer"  # production AI service reuses this name
+# Consume from the enriched stream so attachment URLs are stable storage
+# URLs (signed) instead of short-lived platform URLs. The attachment-
+# downloader sidecar republishes every inbound message here, with
+# ``Attachment.url`` rewritten and ``storage_key`` populated. See
+# plans/260509-2328-attachment-persistence/ and docs/deployment.md.
+INBOUND_SUBJECT: str = "mio.inbound_enriched.>"
+DURABLE: str = "ai-consumer-enriched"  # new durable; old `ai-consumer` is left in place for rollback
 
 # ---------------------------------------------------------------------------
 # Logging
