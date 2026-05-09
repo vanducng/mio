@@ -65,7 +65,9 @@ require (
 	google.golang.org/grpc v1.71.1 // indirect
 )
 
-// replace directives for monorepo local modules.
+// Local replaces: required to resolve placeholder v0.0.0 requires for the
+// unpublished root module and sdk-go. go.work alone does not substitute
+// placeholder versions for workspace members. Non-transitive — safe.
 replace github.com/vanducng/mio => ..
 
 replace github.com/vanducng/mio/sdk-go => ../sdk-go

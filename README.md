@@ -35,7 +35,8 @@ the receiver.
 | `sdk-py/` | Python | Same, for the AI side. |
 | `sink-gcs/` | Go | Consumer that writes raw payloads to GCS. Cold storage + analytics substrate. |
 | `examples/echo-consumer/` | Python | Tiny stub proving the loop. The real agents live in MIU. |
-| `deploy/` | — | `docker-compose.yml` for local; Helm charts for GKE. |
+| `deploy/local/` | — | `docker-compose.yml` + Postgres init + dev secrets for local dev. |
+| `deploy/charts/` | — | Helm charts for GKE; `fluxcd/`, `gke/` for prod GitOps. |
 
 ## Stack
 

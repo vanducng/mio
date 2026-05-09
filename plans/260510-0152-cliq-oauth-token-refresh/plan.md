@@ -53,7 +53,7 @@ to a fresh access token via `playground/cliq/setup-zoho-cliq-oauth.sh` — buys
 |---|---|---|---|---|
 | 1 | [add-token-source-with-refresh](#phase-1-add-token-source-with-refresh) | completed | — | ~2h |
 | 2 | [wire-adapter-and-self-heal-on-401](#phase-2-wire-adapter-and-self-heal-on-401) | completed | 1 | ~2h |
-| 3 | [rotate-secret-and-deploy](#phase-3-rotate-secret-and-deploy) | blocked | 2 | ~30m |
+| 3 | [rotate-secret-and-deploy](#phase-3-rotate-secret-and-deploy) | completed | 2 | ~30m |
 
 ## Constraints
 
