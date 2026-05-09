@@ -56,15 +56,18 @@ service:
 
 ingress:
   enabled: true
-  className: "gce"
+  className: "nginx"
   annotations:
-    kubernetes.io/ingress.allow-http: "false"
-    # cert-manager.io/issuer: letsencrypt-staging   # enable in P8
+    cert-manager.io/cluster-issuer: "letsencrypt-production"
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
   hosts:
     - host: "mio.example.com"   # override per environment
       paths:
         - path: /webhooks/
           pathType: Prefix
+        - path: /cliq
+          pathType: Exact
         - path: /healthz
           pathType: Exact
   tls: []
@@ -92,12 +95,12 @@ livenessProbe:
 
 readinessProbe:
   httpGet:
-    path: /healthz
+    path: /readyz
     port: 8080
   initialDelaySeconds: 5
   periodSeconds: 10
   timeoutSeconds: 3
-  failureThreshold: 3
+  failureThreshold: 6
 
 hpa:
   enabled: true

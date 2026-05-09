@@ -68,36 +68,51 @@ func New(
 	// Webhook routes. URL uses hyphen (web convention); router maps to registry
 	// slug (underscore) via strings.ReplaceAll. For a single channel this is a
 	// direct mapping; the pattern generalises for future adapters.
+	zohoCliqDeps := buildZohoCliqDeps(pg, sdkClient, cfg, m)
 	r.Post("/webhooks/{channel}", func(w http.ResponseWriter, r *http.Request) {
 		urlSlug := chi.URLParam(r, "channel")
 		registrySlug := strings.ReplaceAll(urlSlug, "-", "_")
 
 		switch registrySlug {
 		case "zoho_cliq":
-			deps := zohocliq.HandlerDeps{
-				Pool:      pg,
-				SDK:       sdkClient,
-				TenantID:  cfg.TenantID,
-				AccountID: cfg.AccountID,
-				Secret:    cfg.CliqWebhookSecret,
-				IncInbound: func(direction, outcome string) {
-					m.incInbound("zoho_cliq", direction, outcome)
-				},
-				ObserveLatency: func(direction, outcome string, secs float64) {
-					m.observeLatency("zoho_cliq", direction, outcome, secs)
-				},
-				IncDedup: func() {
-					m.incDedup("zoho_cliq")
-				},
-				Logger: cfg.Logger,
-			}
-			zohocliq.Handler(deps).ServeHTTP(w, r)
+			zohocliq.Handler(zohoCliqDeps).ServeHTTP(w, r)
 		default:
 			http.Error(w, `{"error":"unknown channel"}`, http.StatusNotFound)
 		}
 	})
 
+	// Server-side alias: /cliq → zoho_cliq handler. Keeps ingress path simple
+	// (no rewrite annotations) and matches the locked Cliq webhook URL.
+	r.Post("/cliq", zohocliq.Handler(zohoCliqDeps).ServeHTTP)
+
 	return r
+}
+
+// buildZohoCliqDeps wires Zoho Cliq handler dependencies once so both the
+// generic /webhooks/{channel} route and the /cliq alias share the same deps.
+func buildZohoCliqDeps(
+	pg *pgxpool.Pool,
+	sdkClient *sdk.Client,
+	cfg Config,
+	m *gatewayMetrics,
+) zohocliq.HandlerDeps {
+	return zohocliq.HandlerDeps{
+		Pool:      pg,
+		SDK:       sdkClient,
+		TenantID:  cfg.TenantID,
+		AccountID: cfg.AccountID,
+		Secret:    cfg.CliqWebhookSecret,
+		IncInbound: func(direction, outcome string) {
+			m.incInbound("zoho_cliq", direction, outcome)
+		},
+		ObserveLatency: func(direction, outcome string, secs float64) {
+			m.observeLatency("zoho_cliq", direction, outcome, secs)
+		},
+		IncDedup: func() {
+			m.incDedup("zoho_cliq")
+		},
+		Logger: cfg.Logger,
+	}
 }
 
 // slogMiddleware logs each request with method, path, status, duration.
