@@ -3,7 +3,7 @@
 # and proto/gen/go are reachable without go.work.
 
 # ── Stage 1: build ──────────────────────────────────────────────────────────
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 # Install ca-certificates for TLS in tests; git for VCS stamping.
 RUN apk add --no-cache ca-certificates git
