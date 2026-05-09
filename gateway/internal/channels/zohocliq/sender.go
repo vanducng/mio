@@ -31,7 +31,8 @@ const (
 // Constructed in init.go; all fields are read-only after construction.
 type Adapter struct {
 	baseURL    string
-	botToken   string // Bearer token for bot API calls
+	botToken   string // OAuth access token for bot API calls
+	botName    string // bot unique_name (required for channelsbyname endpoint)
 	httpClient *http.Client
 	logger     *slog.Logger
 }
@@ -40,11 +41,13 @@ type Adapter struct {
 // Called from init.go — panics are acceptable (startup failure).
 //
 //   - CLIQ_BOT_TOKEN (required): Zoho Cliq bot OAuth token
+//   - CLIQ_BOT_NAME  (required for outbound channel posts): bot unique name
 //   - CLIQ_API_BASE_URL (optional): override for tests
 func NewAdapter() *Adapter {
 	botToken := os.Getenv("CLIQ_BOT_TOKEN")
-	// Token is optional at init time — gateway may boot before the secret
-	// is mounted. Calls will fail with 401 if token absent; that's a Term.
+	botName := os.Getenv("CLIQ_BOT_NAME")
+	// Token + name are optional at init; outbound calls will fail explicitly
+	// if either is absent so we get a Term-level error message in the log.
 	baseURL := os.Getenv("CLIQ_API_BASE_URL")
 	if baseURL == "" {
 		baseURL = defaultCliqBaseURL
@@ -52,6 +55,7 @@ func NewAdapter() *Adapter {
 	return &Adapter{
 		baseURL:  baseURL,
 		botToken: botToken,
+		botName:  botName,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -80,11 +84,25 @@ type cliqSendResponse struct {
 }
 
 // Send delivers a new outbound message to Cliq.
-// Returns the Cliq message id (external_id) for later edits.
-// cmd.ConversationExternalId is the Cliq chat id.
+// Uses the bot endpoint POST /api/v2/channelsbyname/{name}/message?bot_unique_name={bot}
+// (the /chats/{id}/messages endpoint is read-only / DM-only and rejects bot posts
+// with request_method_invalid). Channel name must come from cmd.attributes
+// "cliq_channel_name" (echo / MIU sets this from msg.conversation_display_name).
+//
+// Returns: best-effort message id. Cliq returns 204 No Content on success, so
+// we synthesise from cmd.id — edit/replace flows that rely on the returned id
+// will need an explicit lookup once Cliq exposes a write endpoint that returns
+// the message id.
 func (a *Adapter) Send(ctx context.Context, cmd *miov1.SendCommand) (string, error) {
-	if cmd.GetConversationExternalId() == "" {
-		return "", fmt.Errorf("cliq send: conversation_external_id is required")
+	channelName := ""
+	if attrs := cmd.GetAttributes(); attrs != nil {
+		channelName = attrs["cliq_channel_name"]
+	}
+	if channelName == "" {
+		return "", fmt.Errorf("cliq send: attributes.cliq_channel_name is required")
+	}
+	if a.botName == "" {
+		return "", fmt.Errorf("cliq send: CLIQ_BOT_NAME env unset")
 	}
 
 	body := cliqSendRequest{Text: cmd.GetText()}
@@ -93,8 +111,8 @@ func (a *Adapter) Send(ctx context.Context, cmd *miov1.SendCommand) (string, err
 		return "", fmt.Errorf("cliq send: marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v2/chats/%s/messages",
-		a.baseURL, cmd.GetConversationExternalId())
+	url := fmt.Sprintf("%s/api/v2/channelsbyname/%s/message?bot_unique_name=%s",
+		a.baseURL, channelName, a.botName)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 	if err != nil {
@@ -118,20 +136,17 @@ func (a *Adapter) Send(ctx context.Context, cmd *miov1.SendCommand) (string, err
 		return "", err
 	}
 
-	var out cliqSendResponse
-	if err := json.Unmarshal(respBody, &out); err != nil {
-		return "", fmt.Errorf("cliq send: decode response: %w", err)
-	}
-	if out.ID == "" {
-		return "", fmt.Errorf("cliq send: empty message id in response")
-	}
-
+	// Bot endpoint returns 204 No Content on success — no message id available.
+	// Fall back to cmd.id so callers have something to log; edit-flow callers
+	// must look up the actual id separately (out of POC scope).
+	syntheticID := cmd.GetId()
 	a.logger.Info("cliq: sent outbound message",
 		"cmd_id", cmd.GetId(),
-		"conv_external_id", cmd.GetConversationExternalId(),
-		"cliq_msg_id", out.ID,
+		"channel_name", channelName,
+		"http_status", resp.StatusCode,
+		"synthetic_id", syntheticID,
 	)
-	return out.ID, nil
+	return syntheticID, nil
 }
 
 // checkHTTPStatus converts non-2xx Cliq responses into typed errors.

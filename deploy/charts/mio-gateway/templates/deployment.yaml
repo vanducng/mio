@@ -72,6 +72,11 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret }}
                   key: CLIQ_BOT_SCOPE
+            - name: CLIQ_BOT_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret }}
+                  key: CLIQ_BOT_NAME
           volumeMounts:
             # Gateway reads cliq-webhook-secret from /etc/mio/secrets/cliq-webhook-secret (file mount).
             # Projecting the Secret's CLIQ_WEBHOOK_SECRET key under that path.

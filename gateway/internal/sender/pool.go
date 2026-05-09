@@ -240,7 +240,8 @@ func (p *Pool) routeDeliveryError(
 		reason := classify4xx(de)
 		p.termTotal.WithLabelValues(channelType, reason).Inc()
 		p.logger.Error("sender: 4xx — terminating",
-			"channel_type", channelType, "reason", reason, "cmd_id", cmd.GetId())
+			"channel_type", channelType, "reason", reason, "cmd_id", cmd.GetId(),
+			"err", de.Error())
 		_ = d.Term()
 	}
 }

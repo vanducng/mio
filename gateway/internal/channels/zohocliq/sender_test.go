@@ -2,7 +2,6 @@ package zohocliq
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -17,10 +16,22 @@ func newTestAdapter(baseURL string) *Adapter {
 	return &Adapter{
 		baseURL:  baseURL,
 		botToken: "test-token",
+		botName:  "test-bot",
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
 		logger: slog.Default(),
+	}
+}
+
+// testCmd builds a SendCommand with the cliq_channel_name attribute set so
+// Send() doesn't short-circuit on missing channel name.
+func testCmd(id, text string) *miov1.SendCommand {
+	return &miov1.SendCommand{
+		Id:                     id,
+		ConversationExternalId: "chat-abc",
+		Text:                   text,
+		Attributes:             map[string]string{"cliq_channel_name": "test-channel"},
 	}
 }
 
@@ -32,33 +43,30 @@ func TestSend_Success(t *testing.T) {
 		if r.Header.Get("Authorization") != "Zoho-oauthtoken test-token" {
 			t.Errorf("expected Zoho-oauthtoken, got %s", r.Header.Get("Authorization"))
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"id": "cliq-msg-999"})
+		// Bot endpoint returns 204 No Content on success.
+		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
 
 	a := newTestAdapter(srv.URL)
-	cmd := &miov1.SendCommand{
-		Id:                   "cmd-1",
-		ConversationExternalId: "chat-abc",
-		Text:                 "hello",
-	}
+	cmd := testCmd("cmd-1", "hello")
 
 	extID, err := a.Send(context.Background(), cmd)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if extID != "cliq-msg-999" {
-		t.Fatalf("expected cliq-msg-999, got %s", extID)
+	// Bot endpoint returns no message id; sender synthesises from cmd.id.
+	if extID != "cmd-1" {
+		t.Fatalf("expected cmd-1 (synthesised), got %s", extID)
 	}
 }
 
-func TestSend_MissingConversationExternalID(t *testing.T) {
+func TestSend_MissingChannelName(t *testing.T) {
 	a := newTestAdapter("http://unused")
 	cmd := &miov1.SendCommand{Id: "cmd-2", Text: "hi"}
 	_, err := a.Send(context.Background(), cmd)
 	if err == nil {
-		t.Fatal("expected error for missing conversation_external_id")
+		t.Fatal("expected error for missing cliq_channel_name attribute")
 	}
 }
 
@@ -71,11 +79,7 @@ func TestSend_HTTP429_ReturnsHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	a := newTestAdapter(srv.URL)
-	cmd := &miov1.SendCommand{
-		Id:                   "cmd-429",
-		ConversationExternalId: "chat-abc",
-		Text:                 "hi",
-	}
+	cmd := testCmd("cmd-429", "hi")
 
 	_, err := a.Send(context.Background(), cmd)
 	if err == nil {
@@ -100,11 +104,7 @@ func TestSend_HTTP5xx_IsRetryable(t *testing.T) {
 	defer srv.Close()
 
 	a := newTestAdapter(srv.URL)
-	cmd := &miov1.SendCommand{
-		Id:                   "cmd-5xx",
-		ConversationExternalId: "chat-abc",
-		Text:                 "hi",
-	}
+	cmd := testCmd("cmd-5xx", "hi")
 	_, err := a.Send(context.Background(), cmd)
 	httpErr, ok := err.(*HTTPError)
 	if !ok {
@@ -125,11 +125,7 @@ func TestSend_HTTP401_NotRetryable(t *testing.T) {
 	defer srv.Close()
 
 	a := newTestAdapter(srv.URL)
-	cmd := &miov1.SendCommand{
-		Id:                   "cmd-401",
-		ConversationExternalId: "chat-abc",
-		Text:                 "hi",
-	}
+	cmd := testCmd("cmd-401", "hi")
 	_, err := a.Send(context.Background(), cmd)
 	httpErr, ok := err.(*HTTPError)
 	if !ok {
