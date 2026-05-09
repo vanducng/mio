@@ -72,12 +72,25 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret }}
                   key: CLIQ_BOT_SCOPE
+          volumeMounts:
+            # Gateway reads cliq-webhook-secret from /etc/mio/secrets/cliq-webhook-secret (file mount).
+            # Projecting the Secret's CLIQ_WEBHOOK_SECRET key under that path.
+            - name: mio-secrets
+              mountPath: /etc/mio/secrets
+              readOnly: true
           livenessProbe:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
             {{- toYaml .Values.readinessProbe | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: mio-secrets
+          secret:
+            secretName: {{ .Values.secrets.existingSecret }}
+            items:
+              - key: CLIQ_WEBHOOK_SECRET
+                path: cliq-webhook-secret
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

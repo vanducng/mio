@@ -26,7 +26,9 @@ RUN pip install --no-cache-dir -e /sdk-py && \
 # Runtime environment defaults — overridden by docker-compose or K8s.
 ENV NATS_URL=nats://nats:4222
 
-# proto/gen/py on PYTHONPATH so "from mio.v1.xxx_pb2 import ..." resolves.
-ENV PYTHONPATH=/proto/gen/py
+# Do NOT set PYTHONPATH=/proto/gen/py — it injects /proto/gen/py/mio as a
+# namespace package that shadows the sdk-py 'mio' module on first import,
+# losing mio.Client. echo.py performs its own namespace grafting from
+# /proto/gen/py/mio/v1/ at runtime, so the explicit PYTHONPATH is unnecessary.
 
 CMD ["python", "echo.py"]
