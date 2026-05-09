@@ -1,5 +1,5 @@
 [tools]
-go = "1.23"
+go = "1.25"
 python = "3.12"
 "ubi:bufbuild/buf" = "latest"
 "aqua:golangci/golangci-lint" = "2.6.0"
