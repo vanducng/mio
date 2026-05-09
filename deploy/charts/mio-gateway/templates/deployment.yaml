@@ -52,7 +52,7 @@ spec:
             - configMapRef:
                 name: {{ include "mio-gateway.fullname" . }}
           env:
-            - name: DATABASE_URL
+            - name: MIO_POSTGRES_DSN
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.secrets.existingSecret }}
