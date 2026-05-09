@@ -70,9 +70,7 @@ def verify_command(cmd: object) -> None:  # cmd: mio.v1.SendCommand (proto)
     for field in ("id", "tenant_id", "account_id", "channel_type", "conversation_id"):
         val = getattr(cmd, field, "")
         if not val:
-            raise ValueError(
-                f"required field {field!r} is empty in SendCommand"
-            )
+            raise ValueError(f"required field {field!r} is empty in SendCommand")
 
     ct = cmd.channel_type  # type: ignore[attr-defined]
     if ct not in KNOWN and ct not in ALIASES:

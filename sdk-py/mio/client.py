@@ -25,7 +25,13 @@ from nats.js import JetStreamContext
 from opentelemetry.trace import TracerProvider
 from prometheus_client import CollectorRegistry
 
-from mio.metrics import Metrics, OUTCOME_SUCCESS, OUTCOME_ERROR, OUTCOME_DEDUP, OUTCOME_INVALID
+from mio.metrics import (
+    Metrics,
+    OUTCOME_SUCCESS,
+    OUTCOME_ERROR,
+    OUTCOME_DEDUP,
+    OUTCOME_INVALID,
+)
 from mio.subjects import inbound as build_inbound, outbound as build_outbound
 from mio.tracing import inject_trace, extract_trace
 from mio.version import verify, verify_command

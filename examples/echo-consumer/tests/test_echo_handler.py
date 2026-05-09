@@ -22,9 +22,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 # Resolve proto gen path relative to repo root before any echo import.
-_REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..")
-)
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _PROTO_GEN_PY = os.path.join(_REPO_ROOT, "proto", "gen", "py")
 if _PROTO_GEN_PY not in sys.path:
     sys.path.insert(0, _PROTO_GEN_PY)
@@ -40,6 +38,7 @@ from echo import handle  # noqa: E402
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_msg(**overrides) -> Message:
     """Build a minimal valid inbound Message proto."""
@@ -75,6 +74,7 @@ class _FakeClient:
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
+
 
 async def test_handle_basic_echo():
     """handle() produces a SendCommand with echo text and correct fields."""
@@ -113,6 +113,7 @@ async def test_handle_four_tier_scope_preserved():
 # Thread root fallback
 # ---------------------------------------------------------------------------
 
+
 async def test_handle_thread_root_preserved():
     """When thread_root_message_id is set, outbound carries it unchanged."""
     msg = _make_msg(
@@ -143,6 +144,7 @@ async def test_handle_thread_root_fallback_to_source():
 # Idempotency / uniqueness
 # ---------------------------------------------------------------------------
 
+
 async def test_handle_fresh_ulid_per_call():
     """Each handle() call produces a unique cmd.id (fresh ULID)."""
     msg = _make_msg()
@@ -160,6 +162,7 @@ async def test_handle_fresh_ulid_per_call():
 # Attributes
 # ---------------------------------------------------------------------------
 
+
 async def test_handle_replied_to_attribute():
     """attributes['replied_to'] == inbound msg.id."""
     msg = _make_msg(id="inbound-id-42")
@@ -173,6 +176,7 @@ async def test_handle_replied_to_attribute():
 # ---------------------------------------------------------------------------
 # Fresh send semantics (not an edit)
 # ---------------------------------------------------------------------------
+
 
 async def test_handle_edit_fields_empty():
     """edit_of_message_id and edit_of_external_id are empty for echo sends."""
@@ -189,6 +193,7 @@ async def test_handle_edit_fields_empty():
 # Publish call verified
 # ---------------------------------------------------------------------------
 
+
 async def test_handle_calls_publish_outbound_once():
     """publish_outbound called exactly once per message."""
     msg = _make_msg()
@@ -204,6 +209,7 @@ async def test_handle_calls_publish_outbound_once():
 # ---------------------------------------------------------------------------
 # Schema-version asymmetry
 # ---------------------------------------------------------------------------
+
 
 async def test_consume_side_v2_passes_through_to_handle():
     """A v2 Message reaches handle() untouched — consume does NOT validate schema.
@@ -242,6 +248,7 @@ def test_publish_side_schema_mismatch_raises():
 # ---------------------------------------------------------------------------
 # conversation_external_id preserved
 # ---------------------------------------------------------------------------
+
 
 async def test_handle_conversation_external_id_preserved():
     """conversation_external_id forwarded to SendCommand unchanged."""

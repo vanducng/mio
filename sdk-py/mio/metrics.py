@@ -10,6 +10,7 @@ Bucket values match sdk-go/metrics.go exactly for cross-language consistency.
 Outcome values:
   success, error, dedup, timeout, invalid
 """
+
 from prometheus_client import Counter, Histogram, CollectorRegistry, REGISTRY
 
 # Histogram buckets — must match sdk-go/metrics.go exactly.
@@ -70,12 +71,16 @@ class Metrics:
             channel_type=channel_type, direction=direction, outcome=outcome
         ).inc()
 
-    def observe_publish(self, channel_type: str, direction: str, seconds: float) -> None:
+    def observe_publish(
+        self, channel_type: str, direction: str, seconds: float
+    ) -> None:
         self._publish_latency.labels(
             channel_type=channel_type, direction=direction
         ).observe(seconds)
 
-    def observe_consume(self, channel_type: str, direction: str, seconds: float) -> None:
+    def observe_consume(
+        self, channel_type: str, direction: str, seconds: float
+    ) -> None:
         self._consume_latency.labels(
             channel_type=channel_type, direction=direction
         ).observe(seconds)

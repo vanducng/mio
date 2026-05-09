@@ -119,6 +119,7 @@ log = logging.getLogger("echo-consumer")
 # Echo handler
 # ---------------------------------------------------------------------------
 
+
 async def handle(msg: Message, client: mio.Client) -> SendCommand:
     """Build and publish an echo SendCommand for every inbound Message.
 
@@ -133,7 +134,7 @@ async def handle(msg: Message, client: mio.Client) -> SendCommand:
     thread_root = msg.thread_root_message_id or msg.source_message_id
 
     cmd = SendCommand(
-        id=str(ULID()),           # fresh ULID — idempotency addr: out:<id>
+        id=str(ULID()),  # fresh ULID — idempotency addr: out:<id>
         schema_version=1,
         # Four-tier scope — preserved verbatim from inbound.
         tenant_id=msg.tenant_id,
@@ -177,6 +178,7 @@ async def handle(msg: Message, client: mio.Client) -> SendCommand:
 # Main loop
 # ---------------------------------------------------------------------------
 
+
 async def main() -> None:
     # 1. Register signal handlers FIRST — before any long-running await.
     #    SIGTERM → stop.set() + cancel the consumer task so the fetch unblocks immediately.
@@ -192,7 +194,9 @@ async def main() -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _on_signal)
 
-    log.info("connecting url=%s durable=%s subject=%s", NATS_URL, DURABLE, INBOUND_SUBJECT)
+    log.info(
+        "connecting url=%s durable=%s subject=%s", NATS_URL, DURABLE, INBOUND_SUBJECT
+    )
 
     # 2. Connect using sdk-py Client (owns pull-fetch, OTel, metrics).
     client = await mio.Client.connect(

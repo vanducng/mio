@@ -78,11 +78,6 @@ type cliqSendRequest struct {
 	Text string `json:"text"`
 }
 
-// cliqSendResponse is the minimal response shape we need.
-type cliqSendResponse struct {
-	ID string `json:"id"`
-}
-
 // Send delivers a new outbound message to Cliq.
 // Uses the bot endpoint POST /api/v2/channelsbyname/{name}/message?bot_unique_name={bot}
 // (the /chats/{id}/messages endpoint is read-only / DM-only and rejects bot posts

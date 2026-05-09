@@ -3,6 +3,8 @@ go = "1.25"
 python = "3.12"
 "ubi:bufbuild/buf" = "latest"
 "aqua:golangci/golangci-lint" = "2.6.0"
+"aqua:astral-sh/ruff" = "latest"
+"aqua:astral-sh/uv" = "latest"
 protoc = "27"
 
 [env]

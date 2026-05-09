@@ -11,7 +11,7 @@ Callers that need W3C tracecontext must register the propagator at startup:
 
 from __future__ import annotations
 
-from opentelemetry import trace, propagate, context
+from opentelemetry import trace, context
 from opentelemetry.trace import SpanKind, Span, TracerProvider
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 

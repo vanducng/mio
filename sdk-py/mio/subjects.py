@@ -9,10 +9,11 @@ UUIDs and ULIDs are safe; free-text platform IDs must be normalised first.
 The 6th segment (message_id) is outbound edit/delete only.
 Inbound subjects are always 5 tokens (mio + 4 segments).
 """
+
 import re
 from mio.channeltypes import KNOWN, ALIASES
 
-_TOKEN_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
+_TOKEN_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 def _validate_token(t: str, field: str = "token") -> None:

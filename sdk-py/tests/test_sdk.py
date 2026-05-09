@@ -10,12 +10,13 @@ Covers (no live NATS required):
   - Registry loader: active-only Known set
   - Durable name validation: empty durable raises ValueError
 """
+
 import pytest
 from prometheus_client import CollectorRegistry
 
 from mio.subjects import inbound, outbound
 from mio.version import verify, verify_command, SCHEMA_VERSION
-from mio.channeltypes import KNOWN, ALIASES
+from mio.channeltypes import KNOWN
 from mio.metrics import Metrics, HISTOGRAM_BUCKETS
 
 
@@ -23,8 +24,10 @@ from mio.metrics import Metrics, HISTOGRAM_BUCKETS
 # Helpers / fixtures
 # ---------------------------------------------------------------------------
 
+
 class _FakeMsg:
     """Minimal proto Message stand-in for unit tests."""
+
     def __init__(self, **kw):
         self.schema_version = kw.get("schema_version", SCHEMA_VERSION)
         self.tenant_id = kw.get("tenant_id", "tenant-01")
@@ -33,8 +36,10 @@ class _FakeMsg:
         self.conversation_id = kw.get("conversation_id", "conv-01")
         self.source_message_id = kw.get("source_message_id", "src-01")
 
+
 class _FakeCmd:
     """Minimal proto SendCommand stand-in for unit tests."""
+
     def __init__(self, **kw):
         self.id = kw.get("id", "01HV4ABCDEFG")
         self.schema_version = kw.get("schema_version", SCHEMA_VERSION)
@@ -48,6 +53,7 @@ class _FakeCmd:
 # ---------------------------------------------------------------------------
 # Subject builder tests
 # ---------------------------------------------------------------------------
+
 
 def test_inbound_happy_path():
     result = inbound("zoho_cliq", "acct-uuid-001", "conv-uuid-002")
@@ -64,32 +70,45 @@ def test_outbound_with_message_id():
     assert result == "mio.outbound.zoho_cliq.acct-uuid-001.conv-uuid-002.msg-ulid-003"
 
 
-@pytest.mark.parametrize("args,label", [
-    (("", "acct", "conv"), "empty channel_type"),
-    (("zoho_cliq", "", "conv"), "empty account_id"),
-    (("zoho_cliq", "acct", ""), "empty conversation_id"),
-])
+@pytest.mark.parametrize(
+    "args,label",
+    [
+        (("", "acct", "conv"), "empty channel_type"),
+        (("zoho_cliq", "", "conv"), "empty account_id"),
+        (("zoho_cliq", "acct", ""), "empty conversation_id"),
+    ],
+)
 def test_inbound_empty_token(args, label):
     with pytest.raises(ValueError):
         inbound(*args)
 
 
-@pytest.mark.parametrize("args,label", [
-    (("", "acct", "conv"), "empty channel_type"),
-    (("zoho_cliq", "", "conv"), "empty account_id"),
-    (("zoho_cliq", "acct", ""), "empty conversation_id"),
-])
+@pytest.mark.parametrize(
+    "args,label",
+    [
+        (("", "acct", "conv"), "empty channel_type"),
+        (("zoho_cliq", "", "conv"), "empty account_id"),
+        (("zoho_cliq", "acct", ""), "empty conversation_id"),
+    ],
+)
 def test_outbound_empty_token(args, label):
     with pytest.raises(ValueError):
         outbound(*args)
 
 
-@pytest.mark.parametrize("bad_token,field", [
-    ("acct.bad", "account_id with dot"),
-    ("conv.bad", "conversation_id with dot"),
-])
+@pytest.mark.parametrize(
+    "bad_token,field",
+    [
+        ("acct.bad", "account_id with dot"),
+        ("conv.bad", "conversation_id with dot"),
+    ],
+)
 def test_inbound_dot_in_token(bad_token, field):
-    args = ("zoho_cliq", bad_token, "conv") if "account" in field else ("zoho_cliq", "acct", bad_token)
+    args = (
+        ("zoho_cliq", bad_token, "conv")
+        if "account" in field
+        else ("zoho_cliq", "acct", bad_token)
+    )
     with pytest.raises(ValueError, match="illegal characters"):
         inbound(*args)
 
@@ -113,6 +132,7 @@ def test_outbound_unknown_channel_type():
 # Verify tests (publish-side only)
 # ---------------------------------------------------------------------------
 
+
 def test_verify_happy_path():
     verify(_FakeMsg())  # must not raise
 
@@ -122,7 +142,9 @@ def test_verify_schema_mismatch():
         verify(_FakeMsg(schema_version=2))
 
 
-@pytest.mark.parametrize("field", ["tenant_id", "account_id", "channel_type", "conversation_id"])
+@pytest.mark.parametrize(
+    "field", ["tenant_id", "account_id", "channel_type", "conversation_id"]
+)
 def test_verify_empty_field(field):
     with pytest.raises(ValueError):
         verify(_FakeMsg(**{field: ""}))
@@ -151,6 +173,7 @@ def test_verify_command_empty_id():
 # Consume-side asymmetry: schema_version=2 passes through untouched
 # ---------------------------------------------------------------------------
 
+
 def test_consume_passthrough_schema_v2():
     """Assert the consume-side contract: no verify called, v2 passes through."""
     msg = _FakeMsg(schema_version=2)
@@ -166,6 +189,7 @@ def test_consume_passthrough_schema_v2():
 # ---------------------------------------------------------------------------
 # Registry loader tests
 # ---------------------------------------------------------------------------
+
 
 def test_known_contains_active_only():
     assert "zoho_cliq" in KNOWN, "zoho_cliq (status:active) must be in KNOWN"
@@ -184,6 +208,7 @@ def test_known_rejects_unknown():
 # Metric label discipline
 # ---------------------------------------------------------------------------
 
+
 def test_metrics_label_discipline():
     """Verify no forbidden labels appear on any metric."""
     reg = CollectorRegistry()
@@ -194,10 +219,13 @@ def test_metrics_label_discipline():
     forbidden = {"account_id", "tenant_id", "conversation_id", "message_id"}
 
     from prometheus_client.exposition import generate_latest
+
     output = generate_latest(reg).decode()
 
     for bad in forbidden:
-        assert f'{bad}="' not in output, f"Forbidden label {bad!r} found in metrics output"
+        assert f'{bad}="' not in output, (
+            f"Forbidden label {bad!r} found in metrics output"
+        )
 
 
 def test_metrics_counter_has_required_labels():
@@ -206,6 +234,7 @@ def test_metrics_counter_has_required_labels():
     m.inc_publish("zoho_cliq", "inbound", "success")
 
     from prometheus_client.exposition import generate_latest
+
     output = generate_latest(reg).decode()
 
     for label in ("channel_type", "direction", "outcome"):
@@ -219,13 +248,17 @@ def test_metrics_histogram_buckets():
     m.observe_publish("zoho_cliq", "inbound", 0.003)
 
     from prometheus_client.exposition import generate_latest
+
     output = generate_latest(reg).decode()
 
     expected_buckets = [0.001, 0.005, 0.010, 0.050, 0.100, 0.500, 1.0]
     for b in expected_buckets:
         # prometheus_client renders as e.g. le="0.001"
-        assert f'le="{b}"' in output or f'le="{b:.3f}"' in output or f'le="{int(b) if b >= 1 else b}"' in output, \
-            f"Bucket {b} missing from histogram output"
+        assert (
+            f'le="{b}"' in output
+            or f'le="{b:.3f}"' in output
+            or f'le="{int(b) if b >= 1 else b}"' in output
+        ), f"Bucket {b} missing from histogram output"
 
     # Constants match expectations
     assert list(HISTOGRAM_BUCKETS) == expected_buckets
@@ -235,11 +268,12 @@ def test_metrics_histogram_buckets():
 # Durable name validation
 # ---------------------------------------------------------------------------
 
+
 def test_consume_inbound_empty_durable():
     """Empty durable must raise ValueError before any network call."""
     import asyncio
     from mio.client import Client
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     # Build a Client without a real NATS connection.
     mock_nc = MagicMock()
@@ -291,9 +325,10 @@ def test_consume_outbound_empty_durable():
 # Idempotency key builder (inline, no separate module for simplicity)
 # ---------------------------------------------------------------------------
 
+
 def test_inbound_msg_id_format():
     """Idempotency key for inbound uses account_id namespace, not channel_type."""
-    msg_id = f"inb:acct-123:src-msg-456"
+    msg_id = "inb:acct-123:src-msg-456"
     assert msg_id == "inb:acct-123:src-msg-456"
     assert "zoho_cliq" not in msg_id  # must NOT contain channel_type
 
