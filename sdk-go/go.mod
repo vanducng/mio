@@ -30,7 +30,9 @@ require (
 	golang.org/x/sys v0.42.0 // indirect
 )
 
-// replace points to the monorepo root so sdk-go can import the generated proto
-// types (proto/gen/go/mio/v1) without the root module being published.
-// This is a local-only replace directive in sdk-go/go.mod (NOT in root go.mod).
+// Local replace: required so sdk-go can import the unpublished root module
+// (proto/gen/go/mio/v1). The require line uses placeholder v0.0.0; without
+// this replace, Go tries to fetch a non-existent pseudo-version remotely.
+// go.work alone does NOT substitute placeholder versions for workspace members.
+// Non-transitive: never leaks to downstream consumers.
 replace github.com/vanducng/mio => ..

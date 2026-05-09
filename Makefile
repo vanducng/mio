@@ -1,6 +1,6 @@
 .PHONY: help up down proto proto-gen proto-lint proto-breaking proto-roundtrip sdk-go-test sdk-py-test sink-gcs-test sink-gcs-build-local sink-gcs-build lint test clean gateway-build gateway-build-local gateway-test gateway-migrate gateway-bench-outbound echo-up echo-logs echo-consumer-test helm-lint helm-template kind-up kind-deploy kind-smoke kind-down
 
-COMPOSE := docker compose -f deploy/docker-compose.yml
+COMPOSE := docker compose -f deploy/local/docker-compose.yml
 BUILD_VERSION := $(shell git describe --always --dirty 2>/dev/null || echo dev)
 
 help: ## Show this help message

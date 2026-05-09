@@ -1,248 +1,419 @@
 ---
 phase: 8
 title: "POC deploy on GKE"
-status: pending
+status: completed
 priority: P1
 effort: "1d"
 depends_on: [7]
 ---
 
-# P8 — POC deploy on GKE
+# P8 — POC deploy on existing prod GKE via FluxCD
 
 ## Overview
 
-Wire the live Cliq webhook to the cluster. End-to-end loop running
-in-cluster, fully observable. This is the **ship it** milestone.
+Ship Mio POC end-to-end onto the **existing** `dp-prod-7e26` GKE cluster
+(us-central1-a) into a dedicated `mio` namespace, reconciled by **FluxCD**
+from the infra repo at `/Users/vanducng/git/work/ab-spectrum/infra`.
+Mirror the freescout app pattern: HelmRelease + ingress + SOPS-encrypted
+secrets + CNPG cluster. No new cluster, no kube-prometheus-stack rebuild,
+no Tempo/OTel bootstrap — those defer to P10.
 
-All metric labels here use the registry slug (`channel_type="zoho_cliq"`,
-underscore) — matches the SDK + chart conventions; alerts and dashboards
-reference that label, never `channel`. A query against `channel` silently
-returns empty (research-flagged failure mode).
+Cliq webhook lands at `https://mio.abspectrumservices.org/cliq` →
+ingress-nginx → gateway → JetStream → echo-consumer → JetStream → outbound
+dispatcher → Cliq REST → user thread.
 
 ## Goal & Outcome
 
-**Goal:** A user types in Zoho Cliq, sees an echo reply in the same thread, all from in-cluster — and an operator can trace one message end-to-end through Grafana / Tempo / Cloud Logging.
+**Goal:** User types in Zoho Cliq `devduc` channel, sees an echo reply in
+the same thread, all from in-cluster.
 
-**Outcome:** Demo-able. Cliq → Cloud LB → Ingress → gateway → JetStream → echo-consumer → JetStream → gateway-sender → Cliq REST → user's thread. Single `trace_id` visible across all hops.
+**Outcome:** Demo-able end-to-end loop. Secrets in Git via SOPS. Flux
+reconciles on every push to infra repo's main. One runbook for the
+inevitable "webhook returns 5xx" case.
 
 ## Cross-phase contracts (consumed, not changed)
 
-- **Metric labels (P5/P7):** `channel_type`, `direction`, `outcome`. Dashboards/alerts key on `channel_type`.
-- **Subject grammar / underscore slugs (P3):** validated gateway-side; observability is consumer-only.
-- **Stream/consumer provisioning (P3/P7):** gateway startup is authoritative; bootstrap Job is verify-only. P8 observes via metrics, doesn't mutate.
-- **Schema-version (P2):** mismatches surface as `mio_sdk_publish_total{outcome="schema_mismatch"}`; alert + dashboard panel.
-- **Trace propagation (P2):** SDK injects/extracts W3C `traceparent` in NATS headers. **Hard dependency** — if P2 contract breaks, P8 trace continuity breaks.
+- **Stream/consumer provisioning (P3/P7):** gateway startup is authoritative;
+  `mio-jetstream-bootstrap` is verify-only.
+- **Subject grammar / underscore slugs (P3):** validated gateway-side.
+- **Metric labels (P5/P7):** `channel_type`, `direction`, `outcome`. Charts
+  emit ServiceMonitors; if cluster has prometheus-operator they auto-scrape.
+- **HMAC verification (P3):** sole defense for inbound; Deluge script HMAC
+  output (hex/base64 fallback in `gateway/internal/channels/zohocliq/signature.go`)
+  must match `CLIQ_WEBHOOK_SECRET`.
+- **Trace propagation (P2):** soft dep — traces visible only after P10 lands.
 
-## Files
+## Existing prod-cluster facts (no-op)
 
-- **Create:**
-  - `deploy/gke/dns-and-tls.sh` — Cloud DNS record + cert-manager bootstrap
-  - `deploy/gke/observability/cert-issuer.yaml` — staging + prod `Issuer` (Let's Encrypt)
-  - `deploy/gke/observability/values.yaml` — kube-prometheus-stack overrides (tainted obs node, sizing)
-  - `deploy/gke/observability/tempo-values.yaml` — Tempo Helm values (GCS backend)
-  - `deploy/gke/observability/otel-collector.yaml` — DaemonSet (POC shape)
-  - `deploy/gke/observability/grafana-dashboards/mio-overview.json`
-  - `deploy/gke/observability/grafana-dashboards/mio-cliq.json`
-  - `deploy/gke/observability/grafana-dashboards-configmap.yaml` — provisioner ConfigMap
-  - `deploy/gke/observability/alerts.yaml` — `PrometheusRule` (5 rules)
-  - `docs/runbooks/cliq-webhook-down.md`
-  - `docs/runbooks/jetstream-degraded.md`
-  - `docs/runbooks/outbound-rate-limit.md`
-  - `docs/runbooks/release.md` — GHCR PAT rotation, GCP_SA_JSON rotation, image-tag promotion (`<sha>` → `v<semver>`), rollback procedure
-- **Modify:**
-  - `deploy/charts/mio-gateway/values.yaml` — Ingress hostname, TLS issuer, `/readyz` probe tuning
-  - `deploy/charts/mio-gateway/templates/ingress.yaml` — annotations: cert-manager issuer, GCE LB connection drain (120–300s)
-  - `deploy/gke/setup.sh` — confirm `ghcr-pull` imagePullSecret bootstrap (added in P7 §7.9) ran successfully; idempotent re-run safe
-- **GitHub Repo Secrets (configure once before P8):**
-  - `GCP_SA_JSON` — JSON key for `mio-deploy@<PROJECT>.iam.gserviceaccount.com` with `roles/container.developer` + `roles/container.clusterViewer`. Used by `.github/workflows/deploy.yaml` via `google-github-actions/auth@v2`. Rotate every 90 days (manual; runbook). WIF deferred to P10.
-  - `GHCR_PAT` — fine-grained PAT, scope `read:packages` on `vanducng/mio` only, 6-month expiry. Used by `setup.sh` to bootstrap the cluster's `ghcr-pull` Secret. Rotate every 6 months (manual; runbook).
+- `ingress-nginx` deployed; class name `nginx`.
+- `cert-manager` ClusterIssuer `letsencrypt-production` (HTTP-01 via NGINX)
+  at `infra/fluxcd/infrastructure/configs/base/certificates/letsencrypt-production.yaml:4`.
+- CNPG operator deployed; backup SA `prod-cnpg-backup-sa@dp-prod-7e26.iam.gserviceaccount.com`,
+  bucket prefix `gs://ab-spectrum-backups-prod/cnpg/<app>`.
+- SOPS + age encryption for secrets in Git. Key at `infra/.secrets/age-key.txt`.
+- Reference app: `infra/fluxcd/apps/prod/freescout/` + `infra/fluxcd/databases/prod/freescout/`.
 
-## Observability stack (locked picks)
+## Files to create / modify
 
-- **Metrics:** Prometheus via kube-prometheus-stack; ServiceMonitors from charts. Pinned to dedicated `e2-standard-2` node (tainted `observability=true:NoSchedule`).
-  - Prometheus: 250m / 1Gi req, 500m / 2Gi limit; 8Gi PVC, `retentionSize: 6Gi` (cleanup at ~80%).
-  - Grafana: 100m / 256Mi. Alertmanager: 50m / 128Mi.
-- **Traces:** OTel Collector **DaemonSet** → **Tempo in-cluster, GCS backend** (bucket `gs://mio-traces-dev`, Workload Identity write).
-  - Sampling: **100% head sampling** for POC. DaemonSet 128Mi buffer holds ~1k traces/sec safely.
-  - Upgrade path: Deployment-gateway shape post-POC for tail sampling (ERROR-keep 100%, slow-keep 10%, random 1%).
-  - **Not Jaeger** (Elasticsearch ops cost), **not Cloud Trace** (GCP lock-in). Tempo pairs with sink-gcs (same storage layer).
-- **Logs:** stdout JSON → Cloud Logging (default GKE; no sidecar).
-  - Required fields at every span: `trace_id`, `span_id`, `tenant_id`, `account_id`, `channel_type`, `conversation_id`, `mio_message_id`.
-  - Cloud Logging correlation keys: `logging.googleapis.com/trace`, `logging.googleapis.com/spanId`.
-  - **Discipline:** No `text` body at INFO (cost + privacy). DEBUG only, behind flag. WARN may include redacted summary.
+### Mio repo (`/Users/vanducng/git/personal/agents/mio`)
 
-All three signals correlate via `trace_id`. Operator clicks alert → Tempo trace → 5–7 spans (gateway inbound → JS publish → AI consumer → JS publish → gateway sender → Cliq REST) → Cloud Logging by `trace_id` for narrative context.
+**Modify:**
 
-## Alerts (PrometheusRule)
+- `gateway/internal/server/server.go:71` — add server-side alias `/cliq` for
+  `zoho_cliq` handler. Diff:
+  ```go
+  // existing line 71:
+  r.Post("/webhooks/{channel}", func(w http.ResponseWriter, r *http.Request) { ... })
 
-Each threshold = **baseline × 1.5** (baseline captured in step 7). `for: 5m` minimum. All expressions key on `channel_type` (slug).
+  // add below the closing brace of that handler:
+  // Server-side alias: /cliq → zoho_cliq handler. Keeps ingress path simple
+  // (no rewrite annotations) and matches the locked Cliq webhook URL.
+  r.Post("/cliq", func(w http.ResponseWriter, r *http.Request) {
+      deps := zohocliq.HandlerDeps{ /* same construction as default branch */ }
+      zohocliq.Handler(deps).ServeHTTP(w, r)
+  })
+  ```
+  Refactor: extract the `zoho_cliq` `HandlerDeps` builder into a private
+  `func(cfg, m, ...) zohocliq.HandlerDeps` and call from both routes (DRY).
+- `deploy/charts/mio-gateway/values.yaml:59` — `className: gce` → `nginx`.
+- `deploy/charts/mio-gateway/values.yaml:60-62` — uncomment cluster-issuer
+  annotation, drop `kubernetes.io/ingress.allow-http: "false"` (nginx
+  default; cert-manager handles ACME challenge on `:80`).
+- `deploy/charts/mio-gateway/values.yaml:63-67` — keep `/webhooks/` Prefix
+  default; add `/cliq` Exact path (HelmRelease values override host + paths
+  for prod).
+- `deploy/charts/mio-gateway/values.yaml:70` — leave `tls: []` default;
+  HelmRelease sets it for prod.
+- `.github/workflows/ci.yaml` — add `build-echo-consumer` job mirroring
+  existing `build-sink-gcs` step. Build context = repo root,
+  `file: examples/echo-consumer/Dockerfile`, tag
+  `ghcr.io/vanducng/mio/echo-consumer:${{ github.sha }}`. Same
+  `push: true` gate (main only).
 
-```yaml
-groups:
-- name: mio.gateway
-  rules:
-  - alert: MioGatewayHighInboundLatency
-    expr: histogram_quantile(0.99, sum by (le, channel_type) (rate(mio_gateway_inbound_latency_seconds_bucket[5m]))) > 1
-    for: 5m
-    labels: { severity: page }
-    annotations:
-      summary: "Gateway p99 inbound latency > 1s for {{ $labels.channel_type }}"
-      runbook: "docs/runbooks/cliq-webhook-down.md"
+**Create:**
 
-  - alert: MioGatewayBadSignatureSpike
-    expr: rate(mio_gateway_inbound_total{outcome="bad_signature"}[5m]) > 0.1
-    for: 10m
-    labels: { severity: warn }
-    annotations:
-      runbook: "docs/runbooks/cliq-webhook-down.md"
+- `deploy/charts/mio-echo-consumer/` — minimal chart for in-cluster echo
+  consumer. **Files:**
+  - `Chart.yaml` — `name: mio-echo-consumer`, `version: 0.1.0`,
+    `appVersion: "0.1.0"`.
+  - `values.yaml` — image (`ghcr.io/vanducng/mio/echo-consumer`, tag
+    overridden by HelmRelease), `replicaCount: 1`, env
+    (`NATS_URL: nats://mio-nats:4222`,
+    `MIO_TENANT_ID: default`, `MIO_ACCOUNT_ID: default`),
+    `imagePullSecrets: [{name: ghcr-pull}]`, resources (50m/64Mi req,
+    200m/128Mi lim), `serviceAccount.create: true`, securityContext
+    (non-root, read-only fs).
+  - `templates/_helpers.tpl` — copy pattern from `mio-sink-gcs`.
+  - `templates/serviceaccount.yaml` — KSA `mio-echo-consumer`.
+  - `templates/deployment.yaml` — single-container Deployment, no
+    probes for POC (consumer pulls from JetStream; readiness ≈ NATS
+    connect; defer probe wiring to P10), env from values.
+  - (optional) `templates/servicemonitor.yaml` — gated on
+    `serviceMonitor.enabled`; consumer doesn't yet expose `/metrics`,
+    so leave default `false` (revisit P10).
+- `docs/runbooks/cliq-webhook-down.md` — first-5min diagnosis tree (only
+  runbook in P8; jetstream/outbound/release deferred to P10).
+- `docs/deployment.md` — short topology note: namespace, services, how to
+  rotate `CLIQ_WEBHOOK_SECRET`, how Flux reconciles, NATS HA upgrade path.
 
-  - alert: MioGatewayOutboundFailureSpike
-    expr: rate(mio_gateway_outbound_total{outcome="error"}[5m]) > 0.05
-    for: 5m
-    labels: { severity: page }
-    annotations:
-      runbook: "docs/runbooks/outbound-rate-limit.md"
+### Infra repo (`/Users/vanducng/git/work/ab-spectrum/infra`)
 
-  - alert: MioRateLimitBucketLeak
-    expr: mio_gateway_ratelimit_buckets_active > 1000
-    for: 15m
-    labels: { severity: warn }
-    annotations:
-      runbook: "docs/runbooks/outbound-rate-limit.md"
+**Create directory `fluxcd/databases/prod/mio/`:**
 
-- name: mio.jetstream
-  rules:
-  - alert: MioJetStreamConsumerLag
-    expr: nats_consumer_num_pending{stream_name=~"MESSAGES_(INBOUND|OUTBOUND)"} > 100
-    for: 5m
-    labels: { severity: page }
-    annotations:
-      runbook: "docs/runbooks/jetstream-degraded.md"
+- `database.yaml` — CNPG `Cluster` (mirror freescout pattern). 1 instance,
+  10Gi `premium-rwo`, PG 17.2, bootstrap database `mio` owner `mio`,
+  backup `gs://ab-spectrum-backups-prod/cnpg/mio`, WI SA annotation.
+- `service-account.yaml` — `ServiceAccount` `mio-postgres` with WI annotation
+  to `prod-cnpg-backup-sa@dp-prod-7e26.iam.gserviceaccount.com`.
+- `secrets.enc.yaml` — `mio-app-credentials` Secret (SOPS-encrypted) with
+  `username=mio` + `password=<autogen 32-byte>`. Used by CNPG `bootstrap.initdb.secret`.
+- `kustomization.yaml` — resources: service-account, secrets, database.
 
-  - alert: MioJetStreamReplicaLost
-    expr: nats_stream_cluster_replicas{stream_name=~"MESSAGES_.*"} < 3
-    for: 2m
-    labels: { severity: page }
-    annotations:
-      runbook: "docs/runbooks/jetstream-degraded.md"
-```
+**Create directory `fluxcd/apps/base/mio/`** (mirrors freescout convention —
+namespace + Flux source live in base; per-env aggregator references base):
 
-**Validation:** `promtool lint` runs in CI on `alerts.yaml`. Empty query (label drift) → CI fail.
+- `namespace.yaml` — `Namespace mio`.
+- `chart-source.yaml` — `GitRepository` (Flux source-controller) pointing at
+  `https://github.com/vanducng/mio` ref branch `main`. Public repo →
+  no auth secret needed. HelmReleases reference this with
+  `chart.spec.sourceRef.kind: GitRepository`. Avoids publishing to a
+  HelmRepository for POC.
+- `kustomization.yaml` — resources: namespace, chart-source.
+
+**Create directory `fluxcd/apps/prod/mio/`:**
+
+- `release-nats.yaml` — HelmRelease for `mio-nats` (POC: 1 replica,
+  emptyDir, no PVC — accepts data loss per Risk #1). Replica override
+  goes through the upstream nats chart key, e.g.
+  `values.nats.config.cluster.replicas: 1` (verify final key path
+  against `mio-nats/charts/nats-1.2.7.tgz` defaults during §3.7).
+  Document HA upgrade path (3 replicas + PDB + JetStream PVC) in
+  `docs/deployment.md`.
+- `release-gateway.yaml` — HelmRelease for `mio-gateway`. Values override:
+  - `image.tag: <pinned-sha>` (manual bump per deploy; CI does not push to
+    cluster — Flux pulls)
+  - `imagePullSecrets[0].name: ghcr-pull`
+  - `config.natsUrl: nats://mio-nats.mio.svc.cluster.local:4222`
+  - `secrets.existingSecret: mio-gateway-secrets`
+  - `ingress.enabled: false` — managed via `ingress.yaml` for clarity (matches freescout)
+  - DB env via `extraEnv` referencing `mio-app-credentials` (CNPG-owned) +
+    `mio-gateway-secrets` (cliq creds)
+- `release-echo.yaml` — HelmRelease for `mio-echo-consumer` chart (authored
+  in mio repo, see "Modify/Create" above). `image.tag: <pinned-sha>`,
+  `imagePullSecrets[0].name: ghcr-pull`,
+  env: `NATS_URL: nats://mio-nats.mio.svc.cluster.local:4222`.
+- `release-sink.yaml` — HelmRelease for sink-gcs chart. Bucket
+  `gs://ab-spectrum-backups-prod`, object prefix `mio/` (decision: reuse
+  existing backups bucket — single IAM surface, no new bucket creation).
+  WI SA binding: new SA `mio-sink-gcs@dp-prod-7e26.iam.gserviceaccount.com`
+  with `roles/storage.objectAdmin` scoped via IAM Condition to
+  `resource.name.startsWith("projects/_/buckets/ab-spectrum-backups-prod/objects/mio/")`.
+  Sink chart values must set `bucket: ab-spectrum-backups-prod` +
+  `prefix: mio/` so partition keys land at
+  `gs://ab-spectrum-backups-prod/mio/channel_type=.../date=.../`.
+- `ingress.yaml` — `ingressClassName: nginx`, host
+  `mio.abspectrumservices.org`, path `/cliq` Prefix → service `mio-gateway:80`.
+  Annotations: `cert-manager.io/cluster-issuer: letsencrypt-production`,
+  `nginx.ingress.kubernetes.io/proxy-body-size: "1m"`,
+  `nginx.ingress.kubernetes.io/ssl-redirect: "true"`.
+  TLS block: `secretName: mio-gateway-tls`, hosts: same.
+- `secrets.enc.yaml` — `mio-gateway-secrets` (SOPS-encrypted) with keys
+  matching the chart's `templates/deployment.yaml` env mapping:
+  `CLIQ_WEBHOOK_SECRET`, `CLIQ_BOT_TOKEN`, `CLIQ_BOT_SCOPE`,
+  `DATABASE_URL` (built from CNPG creds —
+  `postgresql://mio:$(password)@mio-postgres-rw.mio.svc.cluster.local:5432/mio`).
+  Plaintext source for the Cliq values: `playground/cliq/secrets.env`
+  (`CLIQ_BOT_TOKEN` = the long-lived OAuth access token used today;
+  in-cluster refresh-token handling is out of scope, see "Out").
+- `ghcr-pull.enc.yaml` — `docker-registry` Secret (SOPS-encrypted) for image pulls.
+- `kustomization.yaml` — resources: secrets, ghcr-pull, all 4 releases,
+  ingress. References `../base/mio` (or `../../base/mio` per repo
+  convention) so namespace + GitRepository come from base.
+
+**Modify (infra repo aggregators):**
+
+- `fluxcd/apps/base/kustomization.yaml` — add `- mio` (if a base aggregator
+  exists per freescout convention; otherwise the per-env aggregator
+  references `../base/mio` directly).
+- `fluxcd/apps/prod/kustomization.yaml` — add `- mio`.
+- `fluxcd/databases/prod/kustomization.yaml` — add `- mio`.
 
 ## Steps
 
-1. **DNS + TLS bootstrap** (15 min)
-   1.1. Create Cloud DNS A record `mio.<domain>` → reserved Ingress IP (allocate first via `gcloud compute addresses create`).
-   1.2. Apply `cert-issuer.yaml`: two `Issuer` objects — `letsencrypt-staging` + `letsencrypt-prod` (HTTP-01 solver, GCE class).
-   1.3. Patch gateway Ingress annotation `cert-manager.io/issuer: letsencrypt-staging`. Wait ~5–10 min for cert provisioning + LB sync.
-   1.4. Verify staging cert resolves end-to-end (browser will reject; that's fine — TLS handshake validates).
-   1.5. Swap annotation to `letsencrypt-prod`. cert-manager **reuses the existing Secret** on subsequent reconciliations — critical for staying under the 50-cert/domain/week LE limit during dev iteration.
+### Prep (off-cluster, ~10 min)
 
-2. **Cloud LB tuning**
-   2.1. Backend service health check: endpoint `/readyz`, **5s timeout**, **3-fail unhealthy threshold**, 2-pass healthy threshold, 10s interval.
-   2.2. `connection_draining_timeout_sec: 300` (5min) for graceful rolling deploys.
-   2.3. Helm `strategy.rollingUpdate`: `maxSurge: 0, maxUnavailable: 1` (sequential, set in P7 for split-brain safety). LB drain happens via `connection_draining_timeout_sec: 300` on the surviving replica; one of two pods stays Ready throughout the rollout.
+1.1. Activate prod GCP creds via abs-infra skill:
+  `bash /Users/vanducng/git/work/ab-spectrum/infra/.claude/skills/abs-infra/activate-abs-infra-gcp-credentials.sh prod`
+1.2. Verify context: `kubectl config current-context` → `dp-prod-7e26`.
+1.3. Verify cluster controllers present:
+  `kubectl get clusterissuer letsencrypt-production`,
+  `kubectl get ingressclass nginx`,
+  `kubectl get crd clusters.postgresql.cnpg.io`.
+1.4. Reuse existing bucket `gs://ab-spectrum-backups-prod` with prefix `mio/`
+   (no new bucket creation). Verify access:
+   `gcloud storage ls gs://ab-spectrum-backups-prod/`.
+1.5. Create WI SA + prefix-scoped binding for sink-gcs:
+  ```bash
+  gcloud iam service-accounts create mio-sink-gcs --project=dp-prod-7e26
+  # Object-admin scoped to mio/ prefix only via IAM Condition.
+  gcloud storage buckets add-iam-policy-binding gs://ab-spectrum-backups-prod \
+      --member=serviceAccount:mio-sink-gcs@dp-prod-7e26.iam.gserviceaccount.com \
+      --role=roles/storage.objectAdmin \
+      --condition='expression=resource.name.startsWith("projects/_/buckets/ab-spectrum-backups-prod/objects/mio/"),title=mio_prefix_only'
+  # WI binding so KSA mio/mio-sink-gcs can impersonate the GSA.
+  gcloud iam service-accounts add-iam-policy-binding \
+      mio-sink-gcs@dp-prod-7e26.iam.gserviceaccount.com \
+      --role=roles/iam.workloadIdentityUser \
+      --member="serviceAccount:dp-prod-7e26.svc.id.goog[mio/mio-sink-gcs]"
+  ```
+1.6. Create CNPG-backup-SA binding for the new `mio-postgres` KSA:
+  `gcloud iam service-accounts add-iam-policy-binding prod-cnpg-backup-sa@dp-prod-7e26.iam.gserviceaccount.com --role=roles/iam.workloadIdentityUser --member="serviceAccount:dp-prod-7e26.svc.id.goog[mio/mio-postgres]"`.
+  (Bucket-side IAM already granted at the project level for that SA.)
+1.7. (informational, not a deploy gate) Channel name locked: **`devduc`**.
+   The cluster Secret carries `CLIQ_BOT_TOKEN`/`CLIQ_BOT_SCOPE` only; the
+   `playground/cliq/secrets.env` channel-name field is used by the Deluge
+   bot HMAC test loop and can be updated separately.
 
-3. **GHA → GKE auth bootstrap** (one-time, before first deploy)
-   3.0.1. Create GCP service account `mio-deploy@<PROJECT>.iam.gserviceaccount.com` with `roles/container.developer` + `roles/container.clusterViewer` on the cluster.
-   3.0.2. `gcloud iam service-accounts keys create mio-deploy.json --iam-account=mio-deploy@<PROJECT>.iam.gserviceaccount.com` — copy contents into GitHub repo secret `GCP_SA_JSON`. Delete local `mio-deploy.json` immediately after upload.
-   3.0.3. Verify `.github/workflows/deploy.yaml` (P7 §8.2) authenticates: trigger manually via `workflow_dispatch`; observe `Cluster credentials retrieved successfully` log.
-   3.0.4. Verify `ghcr-pull` Secret exists in `mio` namespace: `kubectl get secret ghcr-pull -n mio` — created by `setup.sh` §7.9 from `GHCR_PAT` env var. If missing (e.g., setup.sh ran without `GHCR_PAT`), run `kubectl create secret docker-registry ghcr-pull -n mio --docker-server=ghcr.io --docker-username=<gh-user> --docker-password=$GHCR_PAT --docker-email=ci@vanducng.dev`.
+### Mio repo changes (~30 min)
 
-4. **Cliq webhook target swap**
-   4.1. Update Cliq incoming webhook URL to `https://mio.<domain>/webhooks/zoho-cliq` (URL hyphen per web convention).
-   4.2. Note: **no IP allowlist** (Zoho doesn't publish stable range). HMAC signature verification (P3 contract) is the sole durable defense.
+2.1. Apply gateway alias route diff (file/line above). Run
+   `cd /Users/vanducng/git/personal/agents/mio/gateway && go build ./...`
+   to verify.
+2.2. Update `deploy/charts/mio-gateway/values.yaml` ingress defaults (nginx,
+   cluster-issuer annotation, dual paths).
+2.3. Author `deploy/charts/mio-echo-consumer/` (Chart.yaml, values.yaml,
+   templates per "Files to create" above). Run
+   `helm lint deploy/charts/mio-echo-consumer`. Run
+   `helm template deploy/charts/mio-echo-consumer | kubectl apply --dry-run=client -f -`
+   to catch manifest errors.
+2.4. Extend `.github/workflows/ci.yaml` with `build-echo-consumer` job
+   (mirror `build-sink-gcs`). Validate locally:
+   `act -W .github/workflows/ci.yaml -j build-echo-consumer` (or push to
+   a branch first; merge to main only when green).
+2.5. Run `helm lint deploy/charts/mio-gateway`.
+2.6. Commit + push to `github.com/vanducng/mio:main`. Tag the SHA — this is
+   the image tag Flux will pin to for all three components.
+2.7. Wait for CI to publish all three images:
+   `ghcr.io/vanducng/mio/gateway:<sha>`,
+   `ghcr.io/vanducng/mio/sink-gcs:<sha>`,
+   `ghcr.io/vanducng/mio/echo-consumer:<sha>` (`gh run watch`).
+2.8. Write `docs/runbooks/cliq-webhook-down.md`:
+   - Symptom (5xx from Cliq, no echo)
+   - Step 1: `kubectl -n mio get pods` — gateway healthy?
+   - Step 2: `kubectl -n mio logs -l app.kubernetes.io/name=mio-gateway --tail=100 | grep -E "bad_signature|publish"`
+   - Step 3: `kubectl -n mio exec deploy/mio-nats -- nats stream info MESSAGES_INBOUND`
+   - Step 4: ingress reachable? `curl -I https://mio.abspectrumservices.org/cliq`
+   - Step 5: secret rotation — re-encrypt `secrets.enc.yaml` with new
+     `CLIQ_WEBHOOK_SECRET`, push, wait for Flux reconcile, update Cliq bot UI.
 
-5. **Observability node + kube-prometheus-stack**
-   5.1. `gcloud container node-pools create obs-pool --machine-type e2-standard-2 --num-nodes 1 --node-taints observability=true:NoSchedule`.
-   5.2. `helm install kube-prometheus-stack` with `values.yaml`: tolerations + `nodeSelector` pinning all obs workloads to obs-pool.
-   5.3. ServiceMonitors auto-discover from chart labels (gateway, echo-consumer, sink, NATS).
-   5.4. Apply `grafana-dashboards-configmap.yaml`: ConfigMap with `mio-overview.json` + `mio-cliq.json`. Grafana sidecar auto-loads.
+### Infra repo changes (~45 min)
 
-6. **Tempo + OTel Collector**
-   6.1. Create GCS bucket `mio-traces-dev`, bind Workload Identity SA with `storage.objectAdmin`.
-   6.2. `helm install tempo grafana/tempo --values tempo-values.yaml` — single-binary mode for POC, GCS storage backend.
-   6.3. Apply `otel-collector.yaml` (DaemonSet): OTLP gRPC :4317 + HTTP :4318 receivers, batch processor (1000 spans / 5s), OTLP exporter to `tempo:4317`.
-   6.4. Add Tempo as Grafana data source. Verify synthetic curl against gateway produces a complete trace.
+3.1. Branch off `main` in infra repo: `feat/mio-poc-deploy`.
+3.2. `mkdir fluxcd/databases/prod/mio fluxcd/apps/base/mio fluxcd/apps/prod/mio`.
+3.3. Author `databases/prod/mio/database.yaml` (copy freescout, change names
+   `freescout` → `mio`, bucket suffix `mio`).
+3.4. Author `service-account.yaml` (KSA `mio-postgres` with WI annotation).
+3.5. Author `secrets.enc.yaml`: plaintext first, then encrypt:
+  ```bash
+  cat <<EOF > secrets.yaml
+  apiVersion: v1
+  kind: Secret
+  metadata: { name: mio-app-credentials, namespace: mio }
+  type: kubernetes.io/basic-auth
+  stringData:
+    username: mio
+    password: $(openssl rand -base64 32 | tr -d '/+=' | head -c 32)
+  EOF
+  SOPS_AGE_KEY_FILE=.secrets/age-key.txt sops -e -i secrets.yaml
+  mv secrets.yaml secrets.enc.yaml
+  ```
+3.6. Author `databases/prod/mio/kustomization.yaml`. Append `- mio` to
+   `databases/prod/kustomization.yaml`.
+3.7. Author base layer: `apps/base/mio/namespace.yaml`,
+   `apps/base/mio/chart-source.yaml`, `apps/base/mio/kustomization.yaml`.
+   Inspect upstream nats chart values: `helm show values
+   ./deploy/charts/mio-nats` to find the cluster-replica key path before
+   authoring `release-nats.yaml`. Then author per-env releases at
+   `apps/prod/mio/release-{nats,gateway,echo,sink}.yaml` +
+   `apps/prod/mio/ingress.yaml`.
+3.8. Author `apps/prod/mio/secrets.enc.yaml` and `ghcr-pull.enc.yaml`:
+  ```bash
+  # mio-gateway-secrets — keys MUST match chart deployment.yaml mapping:
+  # CLIQ_WEBHOOK_SECRET, CLIQ_BOT_TOKEN, CLIQ_BOT_SCOPE, DATABASE_URL.
+  # Source CLIQ_BOT_TOKEN/CLIQ_BOT_SCOPE from playground/cliq/secrets.env.
+  # then SOPS-encrypt as above.
+  # ghcr pull:
+  kubectl create secret docker-registry ghcr-pull \
+      --docker-server=ghcr.io --docker-username=vanducng \
+      --docker-password=$GHCR_PAT --docker-email=ci@vanducng.dev \
+      -n mio --dry-run=client -o yaml > ghcr-pull.yaml
+  SOPS_AGE_KEY_FILE=.secrets/age-key.txt sops -e -i ghcr-pull.yaml
+  mv ghcr-pull.yaml ghcr-pull.enc.yaml
+  ```
+3.9. Author `apps/prod/mio/kustomization.yaml` (resources: secrets,
+   ghcr-pull, releases, ingress; references `../../base/mio`). Append
+   `- mio` to `apps/prod/kustomization.yaml` (and to
+   `apps/base/kustomization.yaml` if a base aggregator exists per
+   freescout convention).
+3.10. Open PR. Once merged, Flux reconciles within `interval` (typically
+    1-5 min). Watch: `flux get kustomizations -A | grep mio`.
 
-7. **Trace propagation validation** (P2 contract check)
-   7.1. Send single test message through Cliq.
-   7.2. In Tempo: confirm one `trace_id` spans **gateway inbound → JS publish → echo-consumer → JS publish → gateway sender → Cliq REST** (5–7 spans).
-   7.3. In Cloud Logging: filter by that `trace_id`; every log line at every hop must carry it.
-   7.4. **If trace breaks:** fix the SDK gap (P2), don't paper over with dashboard logic.
+### DNS + smoke test (~15 min)
 
-8. **Baseline capture + smoke test**
-   8.1. Type "ping" in Cliq, confirm echo within 5s. Screenshot trace in Grafana.
-   8.2. Run 100 messages in 10s (10 msg/sec). Capture 5 min of metrics. Extract p50/p95/p99 inbound + outbound.
-   8.3. **Lock alert thresholds:** set each = `baseline_p99 × 1.5` (then ceiling at the conservative values in `alerts.yaml`). Apply `alerts.yaml`.
-   8.4. Verify rules loaded: `amtool alert query` and `promtool check rules alerts.yaml`.
-
-9. **Failure injection** (ad-hoc; no Chaos Mesh for POC)
-   9.1. **Gateway pod kill:** `kubectl delete pod -l app=gateway` → `MioGatewayHighInboundLatency` fires within ~30s; second replica absorbs traffic.
-   9.2. **NATS pod kill:** `kubectl delete pod mio-nats-0` → quorum re-elects; `MioJetStreamReplicaLost` fires; messages keep flowing.
-   9.3. **Outbound 5xx via toxiproxy:** inject `http_code: 503` on Cliq REST upstream → `MioGatewayOutboundFailureSpike` fires within `for: 5m`.
-   9.4. **Account fairness:** burst one `account_id`; confirm a second account's p99 stays <2s (P5 contract verified in cluster).
-
-10. **Runbooks** — four documents, identical structure: alert → first-5min diagnosis → kubectl/nats/psql commands → escalation → postmortem checklist.
-   10.1. `cliq-webhook-down.md` — covers `MioGatewayHighInboundLatency`, `MioGatewayBadSignatureSpike`. Diagnosis tree: pod health, Postgres slow query, NATS lag, Zoho secret rotation.
-   10.2. `jetstream-degraded.md` — covers `MioJetStreamConsumerLag`, `MioJetStreamReplicaLost`. Diagnosis: consumer stalled, replica lost, Workload Identity expiry, network partition.
-   10.3. `outbound-rate-limit.md` — covers `MioGatewayOutboundFailureSpike`, `MioRateLimitBucketLeak`. Diagnosis: Cliq API degraded, per-workspace bucket TTL, sender pool sizing.
-   10.4. `release.md` — image-tag promotion (`<sha>` → `v<semver>`), `helm rollback` procedure, `GHCR_PAT` rotation (6mo), `GCP_SA_JSON` rotation (90d), pull-secret refresh on PAT change.
+4.1. Once ingress is live, get external IP: `kubectl -n ingress-nginx get svc nginx-ingress-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}'`.
+4.2. **DNS:** Cloud DNS managed zone (manual). Find the zone:
+   `gcloud dns managed-zones list --filter="dnsName:abspectrumservices.org" --project=dp-prod-7e26`.
+   Add A record (replace `<ZONE>` and `<IP>`):
+   ```bash
+   gcloud dns record-sets create mio.abspectrumservices.org. \
+       --zone=<ZONE> --type=A --ttl=300 --rrdatas=<IP> --project=dp-prod-7e26
+   ```
+   Verify: `dig +short mio.abspectrumservices.org` returns the ingress IP.
+4.3. Wait for cert-manager to issue cert: `kubectl -n mio describe cert mio-gateway-tls` — Status `Ready: True`.
+4.4. Probe: `curl -I https://mio.abspectrumservices.org/cliq` → expect 405
+   (GET not allowed; means routing + TLS work).
+4.5. Update Cliq bot webhook URL in Cliq dashboard:
+   `https://mio.abspectrumservices.org/cliq`. Reuse existing
+   `CLIQ_WEBHOOK_SECRET` from playground (now in cluster Secret).
+4.6. In `devduc` channel: type `ping`. Expect echo reply within 5s.
+4.7. Verify GCS archive: `gcloud storage ls gs://ab-spectrum-backups-prod/mio/channel_type=zoho_cliq/date=$(date -u +%F)/`.
 
 ## Success Criteria
 
-- [ ] **GHA → GKE deploy works:** `.github/workflows/deploy.yaml` (P7) authenticates via `GCP_SA_JSON` secret, runs `helm upgrade --set image.tag=<sha>` against the cluster, `kubectl rollout status` returns success. First push to `main` produces a green deploy run.
-- [ ] **Image pulled from ghcr.io:** `kubectl describe pod -n mio mio-gateway-xxx` shows `Successfully pulled image "ghcr.io/vanducng/mio/gateway:<sha>"` via `ghcr-pull` Secret; no `ImagePullBackOff` events.
-- [ ] **Reproducibility:** `helm rollback mio-gateway 1 -n mio` swaps image tag back to prior `<sha>`; pod spec verified.
-- [ ] **`docs/runbooks/release.md`** documents: image tag promotion (`<sha>` → `v<semver>` via git tag), `helm rollback` procedure, `GHCR_PAT` 6-month rotation, `GCP_SA_JSON` 90-day rotation, pull-secret refresh after PAT rotation.
-- [ ] User-visible echo reply in Cliq from a real webhook hitting the cluster
-- [ ] cert-manager issued cert from staging, then prod; **Secret reused across at least one redeploy** (verified via `kubectl describe secret` resourceVersion stability)
-- [ ] One message produces a single `trace_id` visible end-to-end in Tempo (gateway inbound → JS publish → AI consumer → JS publish → gateway sender → Cliq REST)
-- [ ] Structured logs at every span carry `trace_id`, `span_id`, `account_id`; **no `text` body at INFO** (grep audit on a 5-min window)
-- [ ] All five Prometheus alerts pass `promtool lint` in CI
-- [ ] Failure-injection drills produce expected alert firings (3 scenarios from step 8)
-- [ ] Killing one NATS pod → cluster stays healthy, quorum holds, messages keep flowing
-- [ ] 100-message burst: p99 inbound <500ms, p99 outbound <2s
-- [ ] Account-fairness load test passes (P5 contract verified in cluster)
-- [ ] GCS bucket has the day's archived payloads with `channel_type=zoho_cliq/date=YYYY-MM-DD/` partitions
-- [ ] Four runbooks merged with concrete kubectl/nats/psql commands and decision trees (cliq-webhook-down, jetstream-degraded, outbound-rate-limit, release)
-- [ ] Cost projection documented: **~$400/mo idle, ~$430/mo @ 100rps** (recorded in plan or `docs/cost-projection.md`)
+- [ ] Flux reconciles `apps/prod/mio` and `databases/prod/mio` cleanly
+      (`flux get kustomizations -A` all `Ready: True`).
+- [ ] CNPG cluster `mio-postgres` healthy; `kubectl -n mio exec mio-postgres-1 -- psql -c '\l'` lists `mio` DB.
+- [ ] `mio-nats-0` running; gateway logs show `stream MESSAGES_INBOUND created/verified`.
+- [ ] Gateway pod pulls image from `ghcr.io/vanducng/mio/gateway:<sha>` via
+      `ghcr-pull` Secret (no `ImagePullBackOff`).
+- [ ] cert-manager issued `mio-gateway-tls` from `letsencrypt-production`.
+- [ ] `https://mio.abspectrumservices.org/cliq` returns 200 on a real Cliq
+      POST with valid HMAC; 401 on tampered HMAC.
+- [ ] `mio-echo-consumer` pod Running, logs show JetStream subscription
+      established on stream `MESSAGES_INBOUND`.
+- [ ] Type "ping" in `devduc` Cliq channel → echo reply ≤ 5s.
+- [ ] sink-gcs writes a partitioned object to `gs://ab-spectrum-backups-prod/mio/` for that day.
+- [ ] `docs/runbooks/cliq-webhook-down.md` merged to mio repo.
+- [ ] `docs/deployment.md` documents secret rotation procedure + NATS HA upgrade path.
+- [ ] CI workflow publishes all three images:
+      `ghcr.io/vanducng/mio/{gateway,sink-gcs,echo-consumer}:<sha>`.
 
 ## Risks
 
-- **Let's Encrypt rate limits** (50 certs/domain/week) — mitigated by **reusing the cert Secret across redeploys**. cert-manager only re-requests on expiry (90d window), not per-deploy. Always validate with staging Issuer first.
-- **Prometheus OOM on shared pool** — mitigated by **dedicated tainted `e2-standard-2` obs node**; Prometheus capped at 1Gi req / 2Gi limit; `retentionSize: 6Gi` triggers cleanup.
-- **Trace propagation gap** — depends on P2 SDK contract. If a service forgets `traceparent` injection/extraction, trace breaks. Mitigated by: (a) structured logs always carry `trace_id` so partial traces remain debuggable; (b) step 6 validation gates phase completion.
-- **False-positive alerts** — mitigated by **baseline-driven thresholds** (`p99_idle × 1.5`) + `for: 5m` minimum + `promtool lint` in CI. Avoids paging on transient hiccups.
-- **Cloud LB health check too aggressive** — `/readyz` 5s timeout, 3-fail threshold gives slow startups grace; connection draining 300s preserves in-flight webhooks during rollout.
-- **Dashboard label drift** (`channel` vs `channel_type`) — silent failure mode. Mitigated by `promtool` lint on captured queries before merge.
-- **Cliq webhook auth** — Zoho doesn't publish stable IP range, so no allowlist. HMAC signature (P3) is the only durable defense; documented as accepted risk.
-- **Observability cost runaway** — 100% sampling at scale would cost ~$150/mo at 1k tps. POC budget OK; tail sampling is the post-POC cost lever (10× reduction).
+- **Single-instance NATS** — POC accepts data loss on pod loss. Mitigation:
+  doc upgrade path (3-replica + PDB) in `docs/deployment.md`. Out of scope for P8.
+- **HMAC secret mismatch** — Deluge script uses
+  `d3aecd30d153375933beabeba31a13df65acbc7f8bfba528ad4aa56cf8748327`;
+  must match cluster Secret exactly. Mitigation: copy from playground
+  `secrets.env` verbatim; verify via failed-then-success curl test before
+  rotating.
+- **CNPG bootstrap race** — gateway pod starts before DB ready ⇒ crashloop.
+  Mitigation: gateway already has `/readyz` probe gating on pg ping
+  (`gateway/internal/health/`); k8s will retry until DB up.
+- **Flux reconcile timing on secret update** — ~1-5 min default interval.
+  Mitigation: `flux reconcile kustomization mio --with-source` for forced reconcile.
+- **Image tag drift** — Flux pulls whatever tag the HelmRelease pins; CI
+  publishes per-SHA but no auto-bump. Manual bump per release. Mitigation:
+  document in deployment.md; defer auto-bump (image-reflector-controller) to P10.
+- **Single-replica gateway during rollout** — chart default is 2 replicas
+  with `maxSurge=0,maxUnavailable=1`; one pod always Ready. Acceptable for POC.
 
-## Out (deferred)
+## Out (deferred to P10)
 
-- **Tail sampling / Deployment-gateway collector** — DaemonSet stays; gateway shape lands when traffic justifies (>5k traces/sec).
-- **Chaos Mesh CRDs** — ad-hoc drills first; CRD-based reproducibility once runbooks stabilize.
-- **Second channel adapter** — separate phase. POC ships at this milestone with Cliq only.
-- **Cloud Armor / WAF** — add post-POC if attack surface warrants.
+- kube-prometheus-stack rebuild / dedicated obs node (cluster likely already
+  has prometheus-operator; ServiceMonitors auto-scrape).
+- Tempo + OTel Collector + tail sampling.
+- Grafana dashboards as ConfigMap.
+- PrometheusRule alerts (5 rules) + `promtool` CI lint.
+- Failure-injection drills (kubectl delete pod / toxiproxy / Chaos Mesh).
+- Runbooks for `jetstream-degraded`, `outbound-rate-limit`, `release.md`.
+- Cost projection doc.
+- WIF for GHA (Flux model means GHA never touches the cluster directly).
+- image-reflector-controller for auto image-tag bumps.
+- NATS HA (3 replicas + PDB).
+- Second channel adapter.
+- Cloud Armor / WAF.
+
+## Decisions locked (2026-05-09)
+
+1. **DNS:** Cloud DNS managed zone, manual A record via `gcloud dns record-sets create` (Step 4.2).
+2. **Channel name:** `devduc`. The cluster Secret carries `CLIQ_BOT_TOKEN` only; channel name is configured in the Cliq bot dashboard, not as a gateway env var.
+3. **GCS:** reuse `gs://ab-spectrum-backups-prod` with prefix `mio/`. No new bucket. IAM Condition scopes the new `mio-sink-gcs` SA to the prefix.
+4. **Image tag:** pin to commit SHA per deploy in HelmRelease values; manual bump in infra-repo PR per release. Auto-bump (image-reflector-controller) deferred to P10.
+5. **Echo consumer:** authored as a chart in this phase (`deploy/charts/mio-echo-consumer`); CI gains a `build-echo-consumer` job and publishes `ghcr.io/vanducng/mio/echo-consumer:<sha>`. HelmRelease at `apps/prod/mio/release-echo.yaml` pulls per-SHA.
+6. **Gateway Secret keys:** `CLIQ_WEBHOOK_SECRET`, `CLIQ_BOT_TOKEN`, `CLIQ_BOT_SCOPE`, `DATABASE_URL` only. Matches `deploy/charts/mio-gateway/templates/deployment.yaml` mapping. The longer `ZOHO_CLIQ_*` superset (client_id/secret/refresh_token/bot_id/etc.) is out of scope — gateway uses a pre-baked OAuth access token; in-cluster refresh-token handling is a P10+ concern.
+7. **Namespace + GitRepository placement:** `fluxcd/apps/base/mio/` (mirrors freescout). Per-env overlays at `apps/prod/mio/` reference `../../base/mio`.
+8. **NATS POC:** 1 replica, emptyDir, no PVC. Accepts data loss per Risk #1. HA upgrade path (3 replicas + PDB + JetStream PVC) documented in `docs/deployment.md`. Replica override key path verified during §3.7 via `helm show values ./deploy/charts/mio-nats`.
+
+## Still to confirm during execution (non-blocking)
+
+- **`apps/base/kustomization.yaml` aggregator:** if a base-level aggregator file exists in the infra repo, append `- mio` to it. If base entries are referenced directly from per-env overlays (no aggregator), nothing to append at base — verify during §3.9 before opening the PR.
+- **NATS upstream chart key path** for replica override: confirmed shape is `values.nats.config.cluster.replicas` (typical for upstream nats-io chart) but exact path is verified in §3.7 prep step before authoring `release-nats.yaml`.
 
 ## Research backing
 
 [`plans/reports/research-260508-1056-p8-poc-deploy-observability-gke.md`](../../reports/research-260508-1056-p8-poc-deploy-observability-gke.md)
-
-Validated picks (14 questions):
-- **Cloud DNS + cert-manager HTTP-01** (LE staging → prod). Reuse cert Secret across redeploys (LE 50/domain/week).
-- **Cloud LB:** `/readyz` 5s timeout, 3-fail threshold; connection draining 120–300s.
-- **Dedicated tainted `e2-standard-2` obs node**; Prom 250m/1Gi req, 8Gi PVC, retentionSize 6Gi.
-- **Tempo in-cluster + GCS backend** (over Jaeger/Cloud Trace). Pairs with sink-gcs.
-- **OTel Collector DaemonSet** for POC. Upgrade to Deployment-gateway post-POC for tail sampling.
-- **100% head sampling**; DaemonSet 128Mi buffer.
-- **NATS trace propagation** via SDK-injected `traceparent` (P2 contract); validated in step 6.
-- **Structured JSON logging to stdout** → Cloud Logging auto-parse. Required fields locked. No `text` at INFO.
-- **Alert thresholds = baseline × 1.5**, `for: 5m` minimum; `promtool lint` in CI.
-- **Grafana dashboards as code** (JSON in ConfigMap), variables `channel_type` + `account_id`, cross-link to Tempo + Cloud Logging.
-- **Failure injection POC-style:** ad-hoc `kubectl delete pod` + `toxiproxy`; Chaos Mesh deferred.
-- **Skip Cliq IP allowlist** — Zoho has no stable range; HMAC is the durable defense.
-- **Cost:** ~$400/mo idle, ~$430/mo @ 100rps. Tail sampling is the biggest post-POC lever.
-
-Three runbook templates land here; structure: alert → first-5min diagnosis → kubectl/nats/psql commands → escalation → postmortem checklist.
+— observability picks deferred to P10. P8 reuses what's already in
+`dp-prod-7e26`: ingress-nginx, cert-manager + `letsencrypt-production`,
+CNPG, SOPS, FluxCD. Reference deployment pattern: freescout (single
+HelmRelease + ingress + SOPS secrets + CNPG cluster).
