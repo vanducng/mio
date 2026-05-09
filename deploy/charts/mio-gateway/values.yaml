@@ -36,7 +36,7 @@ config:
   tenantId: "00000000-0000-0000-0000-000000000001"
   accountId: "00000000-0000-0000-0000-000000000002"
   schemaVersionStrict: "true"
-  migrateOnStart: "false"   # Migration Job owns schema; pods must NOT run migrations.
+  migrateOnStart: "true"    # POC: gateway pods run migrations on startup (advisory-lock serialised). Separate migrate Job deferred — gateway binary has no migrate subcommand yet.
   logLevel: "info"
   metricsPort: "9090"
   httpPort: "8080"
