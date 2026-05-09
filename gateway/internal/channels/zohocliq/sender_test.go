@@ -29,8 +29,8 @@ func TestSend_Success(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
-		if r.Header.Get("Authorization") != "Bearer test-token" {
-			t.Errorf("expected Bearer token, got %s", r.Header.Get("Authorization"))
+		if r.Header.Get("Authorization") != "Zoho-oauthtoken test-token" {
+			t.Errorf("expected Zoho-oauthtoken, got %s", r.Header.Get("Authorization"))
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": "cliq-msg-999"})

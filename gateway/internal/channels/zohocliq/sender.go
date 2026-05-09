@@ -102,7 +102,8 @@ func (a *Adapter) Send(ctx context.Context, cmd *miov1.SendCommand) (string, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if a.botToken != "" {
-		req.Header.Set("Authorization", "Bearer "+a.botToken)
+		// Cliq REST requires "Zoho-oauthtoken <token>", not standard Bearer.
+		req.Header.Set("Authorization", "Zoho-oauthtoken "+a.botToken)
 	}
 
 	resp, err := a.httpClient.Do(req)
