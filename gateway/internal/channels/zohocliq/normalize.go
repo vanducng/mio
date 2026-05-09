@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	miov1 "github.com/vanducng/mio/proto/gen/go/mio/v1"
 )
 
 // WebhookPayload is the union of Participation Handler and Message Handler shapes.
@@ -128,6 +130,40 @@ type NormalizedMessage struct {
 
 	// Channel-specific extras go into attributes.
 	Attributes map[string]string
+
+	// Structured attachments (raw url/mime/filename — sidecar persists bytes
+	// and rewrites url to a stable signed URL via P9 attachment-downloader).
+	// Empty for text-only messages. Kept as a sibling to Attributes so
+	// downstream consumers can iterate over typed Attachment without parsing
+	// the JSON-encoded `cliq_attachment` attribute.
+	Attachments []NormalizedAttachment
+}
+
+// NormalizedAttachment is the channel-agnostic attachment metadata extracted
+// from the inbound webhook. handler.go converts these to mio.v1.Attachment
+// before publishing to MESSAGES_INBOUND.
+type NormalizedAttachment struct {
+	URL      string
+	MIME     string
+	Filename string
+}
+
+// attachmentKindFromMime maps a MIME type to the structured Kind enum on
+// mio.v1.Attachment. Unknown types fall back to KIND_FILE so consumers can
+// always render *something*.
+func attachmentKindFromMime(mime string) miov1.Attachment_Kind {
+	switch {
+	case strings.HasPrefix(mime, "image/"):
+		return miov1.Attachment_KIND_IMAGE
+	case strings.HasPrefix(mime, "audio/"):
+		return miov1.Attachment_KIND_AUDIO
+	case strings.HasPrefix(mime, "video/"):
+		return miov1.Attachment_KIND_VIDEO
+	case mime == "":
+		return miov1.Attachment_KIND_UNSPECIFIED
+	default:
+		return miov1.Attachment_KIND_FILE
+	}
 }
 
 // Normalize maps a Cliq WebhookPayload to a NormalizedMessage.
@@ -186,9 +222,18 @@ func Normalize(p *WebhookPayload) (*NormalizedMessage, error) {
 		nm.SenderIsBot = true
 	}
 
-	// --- Attachment → attributes ---
+	// --- Attachment → structured + attributes (legacy JSON kept for back-compat) ---
 	if msg.File != nil {
-		// Store attachment metadata in attributes as JSON.
+		// Structured form for the P9 attachment-downloader sidecar.
+		if msg.File.URL != "" {
+			nm.Attachments = append(nm.Attachments, NormalizedAttachment{
+				URL:      msg.File.URL,
+				MIME:     msg.File.Type,
+				Filename: msg.File.Name,
+			})
+		}
+		// Raw JSON form preserved so consumers that already parse this
+		// attribute keep working until they migrate to typed Attachments.
 		attJSON, _ := json.Marshal(msg.File)
 		nm.Attributes["cliq_attachment"] = string(attJSON)
 	}

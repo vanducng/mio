@@ -174,6 +174,16 @@ func Handler(deps HandlerDeps) http.HandlerFunc {
 			ReceivedAt: timestamppb.Now(),
 			Attributes: nm.Attributes,
 		}
+		// Convert normalized attachments to proto Attachments so the P9
+		// attachment-downloader sidecar can persist bytes and rewrite urls.
+		for _, a := range nm.Attachments {
+			protoMsg.Attachments = append(protoMsg.Attachments, &miov1.Attachment{
+				Kind:     attachmentKindFromMime(a.MIME),
+				Url:      a.URL,
+				Mime:     a.MIME,
+				Filename: a.Filename,
+			})
+		}
 		// Cliq bot adapter (sender.go) needs the channel unique_name (lowercase
 		// API slug, e.g. "ducdev"), NOT the chat title ("#DucDev"). Normalize
 		// stashes it via attributes["cliq_channel_unique_name"].

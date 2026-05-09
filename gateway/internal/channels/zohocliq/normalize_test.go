@@ -57,6 +57,22 @@ func TestNormalize_FileAttachment(t *testing.T) {
 	if _, ok := nm.Attributes["cliq_attachment"]; !ok {
 		t.Error("expected cliq_attachment in attributes for file message")
 	}
+	// P9: structured Attachments must also be populated so the
+	// attachment-downloader sidecar can find the URL without parsing the
+	// JSON-encoded `cliq_attachment` attribute.
+	if len(nm.Attachments) != 1 {
+		t.Fatalf("expected 1 normalized attachment, got %d", len(nm.Attachments))
+	}
+	att := nm.Attachments[0]
+	if att.URL == "" {
+		t.Error("expected non-empty Attachments[0].URL")
+	}
+	if att.MIME == "" {
+		t.Error("expected non-empty Attachments[0].MIME")
+	}
+	if att.Filename == "" {
+		t.Error("expected non-empty Attachments[0].Filename")
+	}
 }
 
 func TestNormalize_ThreadReply(t *testing.T) {
